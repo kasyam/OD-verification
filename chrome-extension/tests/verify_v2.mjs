@@ -3133,6 +3133,18 @@ const overlay = require('../overlay.js');
   bridgeListeners['p3h:bridge:req']({
     detail: JSON.stringify({ id: 'b1', action: 'dt:ensure', payload: { selector: '#pt-file_table_list' } }),
   });
+  const res1 = dispatchedEvents.find((e) => e.type === 'p3h:bridge:res');
+  assert.ok(res1);
+  assert.equal(JSON.parse(res1.detail).result.newlyBound, true);
+
+  dispatchedEvents.length = 0;
+  bridgeListeners['p3h:bridge:req']({
+    detail: JSON.stringify({ id: 'b2', action: 'dt:ensure', payload: { selector: '#pt-file_table_list' } }),
+  });
+  const res2 = dispatchedEvents.find((e) => e.type === 'p3h:bridge:res');
+  assert.ok(res2);
+  assert.equal(JSON.parse(res2.detail).result.newlyBound, false);
+
   dispatchedEvents.length = 0;
 
   jqHandlers['page.dt.p3h']();

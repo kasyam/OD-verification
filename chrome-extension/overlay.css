@@ -250,6 +250,14 @@
   font-size: 12px;
 }
 
+/* Prevent blue shadow / focus glow on DataTables pagination buttons */
+.dataTables_paginate .paginate_button:focus,
+.dataTables_paginate a:focus,
+.dataTables_paginate button:focus {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
 /* Row Badges */
 .p3h-cell-meta {
   display: flex;

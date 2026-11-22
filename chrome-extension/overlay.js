@@ -2803,6 +2803,16 @@
       ) {
         activeEl.blur();
       }
+      const wrap = table.closest ? table.closest('.dataTables_wrapper') : null;
+      const pagEl = wrap
+        ? wrap.querySelector('.dataTables_paginate')
+        : document.querySelector && document.querySelector('.dataTables_paginate');
+      if (pagEl && pagEl.querySelectorAll) {
+        const focused = pagEl.querySelectorAll(':focus');
+        focused.forEach((el) => {
+          if (typeof el.blur === 'function') el.blur();
+        });
+      }
     } catch (_e) {}
 
     const anchorEl =
@@ -2815,6 +2825,16 @@
       scrollBody.scrollTop = 0;
     }
 
+    if (anchorEl && typeof anchorEl.scrollIntoView === 'function') {
+      try {
+        anchorEl.scrollIntoView({ block: 'start', inline: 'nearest', behavior: 'auto' });
+      } catch (_e) {
+        try {
+          anchorEl.scrollIntoView(true);
+        } catch (_e2) {}
+      }
+    }
+
     let cur = anchorEl ? anchorEl.parentElement : null;
     while (cur && cur !== document.body && cur !== document.documentElement) {
       if (cur.scrollHeight > cur.clientHeight + 1) {
@@ -2823,7 +2843,7 @@
           const overflowY = window.getComputedStyle(cur).overflowY || '';
           isScrollable = /(auto|scroll|overlay)/i.test(overflowY);
         }
-        if (isScrollable && cur.scrollTop > 0) {
+        if (isScrollable) {
           if (
             typeof anchorEl.getBoundingClientRect === 'function' &&
             typeof cur.getBoundingClientRect === 'function'
@@ -2882,9 +2902,17 @@
               if (tbl && tbl.isConnected) scrollWorksTableToTop(tbl);
             };
             if (typeof requestAnimationFrame === 'function') {
-              requestAnimationFrame(() => requestAnimationFrame(doScroll));
+              requestAnimationFrame(() => {
+                doScroll();
+                if (typeof setTimeout === 'function') {
+                  setTimeout(doScroll, 50);
+                }
+              });
             } else {
               doScroll();
+              if (typeof setTimeout === 'function') {
+                setTimeout(doScroll, 50);
+              }
             }
           }
         }
@@ -2955,7 +2983,7 @@
             t &&
               t.closest &&
               t.closest(
-                '#p3h-toolbar, #p3h-drawer, #p3h-drawer-backdrop, #p3h-register-modal, .p3h-cell-meta'
+                '#p3h-toolbar, #p3h-drawer, #p3h-drawer-backdrop, #p3h-register-modal, .p3h-cell-meta, #pt-file_table_list, .dataTables_wrapper'
               )
           );
         });

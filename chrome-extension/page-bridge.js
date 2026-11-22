@@ -25,6 +25,7 @@
   const rowMetaMap = new WeakMap();
   let currentTable = null;
   let currentDt = null;
+  let currentSettings = null;
   let dtFilterRegistered = false;
   let pendingPageChange = false;
   const filterState = {
@@ -179,8 +180,10 @@
         const { table, jq, dt } = resolveTableAndDt(payload && payload.selector);
         if (!dt) return { hasDt: false, newlyBound: false };
 
-        const newlyBound = currentTable !== table || currentDt !== dt;
+        const settings = dt && dt.settings && typeof dt.settings === 'function' ? dt.settings()[0] || dt : dt;
+        const newlyBound = currentTable !== table || currentSettings !== settings;
         currentTable = table;
+        currentSettings = settings;
         currentDt = dt;
 
         if (!dtFilterRegistered) {
@@ -207,6 +210,30 @@
           .on('draw.dt.p3h', function () {
             const pageChanged = pendingPageChange;
             pendingPageChange = false;
+            if (pageChanged) {
+              try {
+                if (
+                  document.activeElement &&
+                  document.activeElement.closest &&
+                  document.activeElement.closest('.dataTables_paginate')
+                ) {
+                  document.activeElement.blur();
+                }
+              } catch (_e) {}
+              if (typeof setTimeout === 'function') {
+                setTimeout(() => {
+                  try {
+                    if (
+                      document.activeElement &&
+                      document.activeElement.closest &&
+                      document.activeElement.closest('.dataTables_paginate')
+                    ) {
+                      document.activeElement.blur();
+                    }
+                  } catch (_e) {}
+                }, 0);
+              }
+            }
             document.dispatchEvent(
               new CustomEvent('p3h:dt:draw', {
                 detail: JSON.stringify({ pageChanged }),
@@ -269,6 +296,7 @@
         filterState.visibleSet = null;
         pendingPageChange = false;
         currentTable = null;
+        currentSettings = null;
         currentDt = null;
         return true;
       }
