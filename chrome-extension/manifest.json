@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "PRICE 3.0 Helper",
+  "version": "2.4.0",
+  "description": "Adds Final/Part/M-Book Closed classification, deactivated DPR & stage exclusion, multi-activity finalization & missing-field rescans, AS/TS/Agreement/Contractor/Constituency extraction, Financial Status (% of adjusted TS), 0-150% agreement-period bar & Open M-Book >=75% filter, manual archiving, timestamped milestone progress chronology, multi-select filters, customizable column order, and an Activity-wise / File-wise Project Register & Report Builder for Kerala PWD PRICE 3.0.",
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://price3.kerala.gov.in/price3_pwd/*"
+      ],
+      "js": [
+        "page-bridge.js"
+      ],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://price3.kerala.gov.in/price3_pwd/*"
+      ],
+      "css": [
+        "overlay.css"
+      ],
+      "js": [
+        "db.js",
+        "extractor.js",
+        "register.js",
+        "overlay.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

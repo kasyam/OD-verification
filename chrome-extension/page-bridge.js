@@ -1,0 +1,296 @@
+/**
+ * PRICE 3.0 Helper — Minimal MAIN-World Page Bridge
+ *
+ * Exposes zero globals on window and responds only to allowlisted synchronous
+ * CustomEvent requests from the extension's ISOLATED content scripts:
+ *   - Reading/updating PRICE 3.0 CSRF token (window.GTOKEN / input[name="price_token"])
+ *   - Accessing page jQuery DataTables rows, search-applied rows, filtering, and page length
+ */
+(function () {
+  'use strict';
+
+  const BRIDGE_SYM = Symbol.for('p3h.pageBridge.v1');
+  if (typeof document === 'undefined' || document[BRIDGE_SYM]) return;
+  try {
+    Object.defineProperty(document, BRIDGE_SYM, {
+      value: true,
+      configurable: false,
+      enumerable: false,
+      writable: false,
+    });
+  } catch (e) {
+    return;
+  }
+
+  const rowMetaMap = new WeakMap();
+  let currentTable = null;
+  let currentDt = null;
+  let dtFilterRegistered = false;
+  let pendingPageChange = false;
+  const filterState = {
+    active: false,
+    visibleSet: null,
+  };
+
+  function cleanSingleLine(str) {
+    return String(str == null ? '' : str)
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  const BLOCK_TAGS = new Set([
+    'BR',
+    'P',
+    'DIV',
+    'LI',
+    'TR',
+    'H1',
+    'H2',
+    'H3',
+    'H4',
+    'H5',
+    'H6',
+  ]);
+
+  function extractSubjectText(td) {
+    if (!td) return '';
+    const parts = [];
+    const walk = (node) => {
+      if (!node) return;
+      if (node.nodeType === 3) {
+        parts.push(node.nodeValue || '');
+        return;
+      }
+      if (node.nodeType !== 1) return;
+      if (node.classList && node.classList.contains('p3h-cell-meta')) return;
+      const tag = node.tagName ? node.tagName.toUpperCase() : '';
+      if (tag === 'BR') {
+        parts.push('\n');
+        return;
+      }
+      const isBlock = BLOCK_TAGS.has(tag);
+      if (isBlock && parts.length > 0 && parts[parts.length - 1] !== '\n') {
+        parts.push('\n');
+      }
+      const children = node.childNodes;
+      for (let i = 0; i < children.length; i++) {
+        walk(children[i]);
+      }
+      if (isBlock && parts.length > 0 && parts[parts.length - 1] !== '\n') {
+        parts.push('\n');
+      }
+    };
+    walk(td);
+    return parts
+      .join('')
+      .replace(/\r\n/g, '\n')
+      .replace(/[ \t]+/g, ' ')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  }
+
+  function extractRowMetaFromTr(tr) {
+    if (!tr || !tr.querySelectorAll) return null;
+    if (rowMetaMap.has(tr)) {
+      return rowMetaMap.get(tr);
+    }
+
+    const tds = tr.querySelectorAll('td');
+    if (tds.length < 5) return null;
+
+    let fileId = '';
+    const nodes = [tr, ...Array.from(tr.querySelectorAll('[onclick]'))];
+    for (let i = 0; i < nodes.length; i++) {
+      const m = (nodes[i].getAttribute('onclick') || '').match(
+        /callworkfiledetails\([^,]+,\s*[^,]+,\s*['"]?(\d+)['"]?\s*\)/
+      );
+      if (m && m[1]) {
+        fileId = m[1];
+        break;
+      }
+    }
+    if (!fileId) return null;
+
+    const meta = {
+      rowNo: cleanSingleLine(tds[0].textContent),
+      fileId,
+      fileNumber: cleanSingleLine(tds[1].textContent),
+      subject: extractSubjectText(tds[2]),
+      createdBy: cleanSingleLine(tds[3].textContent),
+      createdOn: cleanSingleLine(tds[4].textContent),
+    };
+    rowMetaMap.set(tr, meta);
+    return meta;
+  }
+
+  function resolveTableAndDt(selector) {
+    const sel = typeof selector === 'string' && selector ? selector : '#pt-file_table_list';
+    const table = document.querySelector(sel);
+    if (!table) return { table: null, jq: null, dt: null };
+    const jq = window.jQuery;
+    if (jq && jq.fn && jq.fn.dataTable && jq.fn.dataTable.isDataTable(table)) {
+      return { table, jq, dt: jq(table).DataTable() };
+    }
+    return { table, jq, dt: null };
+  }
+
+  function respond(id, ok, result, error) {
+    document.dispatchEvent(
+      new CustomEvent('p3h:bridge:res', {
+        detail: JSON.stringify({
+          id,
+          ok: Boolean(ok),
+          result: ok ? result : null,
+          error: ok ? null : String(error || 'Bridge error'),
+        }),
+      })
+    );
+  }
+
+  function handleAction(action, payload) {
+    switch (action) {
+      case 'getToken': {
+        if (typeof window.GTOKEN === 'string' && window.GTOKEN.trim()) {
+          return window.GTOKEN.trim();
+        }
+        const gtokenEl = document.getElementById('gtoken');
+        if (gtokenEl && typeof gtokenEl.value === 'string' && gtokenEl.value.trim()) {
+          return gtokenEl.value.trim();
+        }
+        const inp = document.querySelector('input[name="price_token"]');
+        return inp && typeof inp.value === 'string' ? inp.value.trim() : '';
+      }
+
+      case 'setToken': {
+        const tok = payload && typeof payload.token === 'string' ? payload.token.trim() : '';
+        if (!tok) return false;
+        window.GTOKEN = tok;
+        const gtokenEl = document.getElementById('gtoken');
+        if (gtokenEl && 'value' in gtokenEl) {
+          gtokenEl.value = tok;
+        }
+        document.querySelectorAll('input[name="price_token"]').forEach((inp) => {
+          inp.value = tok;
+        });
+        return true;
+      }
+
+      case 'dt:ensure': {
+        const { table, jq, dt } = resolveTableAndDt(payload && payload.selector);
+        if (!dt) return { hasDt: false, newlyBound: false };
+
+        const newlyBound = currentTable !== table || currentDt !== dt;
+        currentTable = table;
+        currentDt = dt;
+
+        if (!dtFilterRegistered) {
+          jq.fn.dataTable.ext.search.push(function (settings, _data, dataIndex) {
+            if (!currentTable || settings.nTable !== currentTable) return true;
+            if (!filterState.active || !filterState.visibleSet) return true;
+            const rowNode =
+              (settings.aoData && settings.aoData[dataIndex] && settings.aoData[dataIndex].nTr) ||
+              (currentDt && typeof currentDt.row === 'function'
+                ? currentDt.row(dataIndex).node()
+                : null);
+            const meta = extractRowMetaFromTr(rowNode);
+            if (!meta) return true;
+            return filterState.visibleSet.has(meta.fileId);
+          });
+          dtFilterRegistered = true;
+        }
+
+        jq(table)
+          .off('page.dt.p3h draw.dt.p3h')
+          .on('page.dt.p3h', function () {
+            pendingPageChange = true;
+          })
+          .on('draw.dt.p3h', function () {
+            const pageChanged = pendingPageChange;
+            pendingPageChange = false;
+            document.dispatchEvent(
+              new CustomEvent('p3h:dt:draw', {
+                detail: JSON.stringify({ pageChanged }),
+              })
+            );
+          });
+
+        return { hasDt: true, newlyBound };
+      }
+
+      case 'dt:getAllRows': {
+        const { dt } = resolveTableAndDt(payload && payload.selector);
+        if (!dt) return { hasDt: false, rows: [] };
+        const rows = [];
+        dt.rows()
+          .nodes()
+          .each((tr) => {
+            const meta = extractRowMetaFromTr(tr);
+            if (meta) rows.push(meta);
+          });
+        return { hasDt: true, rows };
+      }
+
+      case 'dt:getSearchAppliedFileIds': {
+        const { dt } = resolveTableAndDt(payload && payload.selector);
+        if (!dt) return { hasDt: false, fileIds: [] };
+        const fileIds = [];
+        dt.rows({ search: 'applied' })
+          .nodes()
+          .each((tr) => {
+            const meta = extractRowMetaFromTr(tr);
+            if (meta) fileIds.push(meta.fileId);
+          });
+        return { hasDt: true, fileIds };
+      }
+
+      case 'dt:setVisibleFileIds': {
+        const active = Boolean(payload && payload.active);
+        filterState.active = active;
+        filterState.visibleSet = active
+          ? new Set((Array.isArray(payload.fileIds) ? payload.fileIds : []).map(String))
+          : null;
+        const { dt } = resolveTableAndDt(payload && payload.selector);
+        if (dt && (!payload || payload.draw !== false)) {
+          dt.draw(Boolean(payload && payload.resetPaging));
+        }
+        return { hasDt: Boolean(dt), active };
+      }
+
+      case 'dt:setPageLen': {
+        const len = payload && parseInt(payload.len, 10);
+        const { dt } = resolveTableAndDt(payload && payload.selector);
+        if (!dt || !Number.isFinite(len)) return { hasDt: Boolean(dt) };
+        dt.page.len(len).draw();
+        return { hasDt: true };
+      }
+
+      case 'dt:clear': {
+        filterState.active = false;
+        filterState.visibleSet = null;
+        pendingPageChange = false;
+        currentTable = null;
+        currentDt = null;
+        return true;
+      }
+
+      default:
+        throw new Error(`Unsupported bridge action: ${String(action || '')}`);
+    }
+  }
+
+  document.addEventListener('p3h:bridge:req', (ev) => {
+    let req = null;
+    try {
+      req = typeof ev.detail === 'string' ? JSON.parse(ev.detail) : ev.detail;
+    } catch (e) {
+      return;
+    }
+    if (!req || typeof req.id !== 'string') return;
+    try {
+      const result = handleAction(req.action, req.payload || null);
+      respond(req.id, true, result);
+    } catch (err) {
+      respond(req.id, false, null, err && err.message ? err.message : String(err));
+    }
+  });
+})();
