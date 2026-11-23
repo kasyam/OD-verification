@@ -1,8 +1,10 @@
-# PRICE 3.0 Helper (Chrome Extension v2.4.0)
+# PRICE 3.0 Helper (Chrome Extension v2.5.0)
 
 A local Chrome Extension overlay for `https://price3.kerala.gov.in/price3_pwd/*` running with MV3 origin isolation (extension IndexedDB in `background.js`, UI/fetch logic in `ISOLATED` content scripts, and a zero-global `MAIN`-world `page-bridge.js` for portal DataTables/CSRF access).
 
-## Key Features (v2.4.0)
+## Key Features (v2.5.0)
+- **RE Preparation Batch Clear "To Be Executed" Measurements**:
+  - Adds a **Clear TBE** button directly on the Revised Estimate Preparation toolbar for row-anchored spec selection, read-only **Check TBE** pre-scan, Shift+Click range selection, sequential CSRF-safe deletion (`call_to_be_executed.pro` / `delete_re_to_be_executed.pro`) with retries, and a single end-of-batch RE table refresh without affecting Executed (e-MBook) measurements.
 - **Deactivated DPR & Mixed-Work Filtering**:
   - Accurately detects deactivated estimate/component nodes across ancestors and descendants and excludes deactivated DPR stubs (`stageName = "DPR"`) from ongoing work tracking while keeping them viewable inside a collapsible drawer section.
 - **Non-Composite Multi-Activity Finalization & Auto-Reconciliation**:

@@ -10,7 +10,7 @@
 (function (globalScope) {
   'use strict';
 
-  const EXTENSION_VERSION = '2.4.0';
+  const EXTENSION_VERSION = '2.5.0';
   const EXTRACTOR_VERSION = 3;
 
   const DB_NAME = 'p3h_price_db';

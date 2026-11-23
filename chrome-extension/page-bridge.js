@@ -301,6 +301,65 @@
         return true;
       }
 
+      case 're:getContext': {
+        const hasMeasurementFormOpen =
+          typeof window.checkMeasurementTabExists === 'function'
+            ? String(window.checkMeasurementTabExists()) === '1'
+            : false;
+        return {
+          curHeadId:
+            window.CURHEADID !== undefined && window.CURHEADID !== null
+              ? String(window.CURHEADID).trim()
+              : '',
+          selTab:
+            window.SELTAB !== undefined && window.SELTAB !== null
+              ? String(window.SELTAB).trim()
+              : '',
+          selItem:
+            window.SELITEM !== undefined && window.SELITEM !== null
+              ? String(window.SELITEM).trim()
+              : '',
+          hasMeasurementFormOpen,
+          canRefreshHeading: typeof window.re_change_heading === 'function',
+          canRefreshLeftList: typeof window.call_left_spec_list === 'function',
+        };
+      }
+
+      case 're:refreshAfterDelete': {
+        const rawHeadId =
+          payload && payload.headId !== undefined && payload.headId !== null
+            ? String(payload.headId).trim()
+            : window.CURHEADID !== undefined && window.CURHEADID !== null
+            ? String(window.CURHEADID).trim()
+            : '';
+        const lastHeadSpecId =
+          payload && payload.lastHeadSpecId !== undefined && payload.lastHeadSpecId !== null
+            ? String(payload.lastHeadSpecId).trim()
+            : '';
+        const formOpen =
+          typeof window.checkMeasurementTabExists === 'function' &&
+          String(window.checkMeasurementTabExists()) === '1';
+
+        if (
+          rawHeadId &&
+          !formOpen &&
+          typeof window.re_change_heading === 'function' &&
+          document.getElementById('headorderNo' + rawHeadId)
+        ) {
+          window.re_change_heading(rawHeadId);
+          return { refreshed: true, method: 're_change_heading', headId: rawHeadId };
+        }
+        if (rawHeadId && typeof window.call_left_spec_list === 'function') {
+          window.call_left_spec_list(rawHeadId, lastHeadSpecId);
+          return { refreshed: true, method: 'call_left_spec_list', headId: rawHeadId };
+        }
+        if (rawHeadId && typeof window.revised_estimation_grand_total === 'function') {
+          window.revised_estimation_grand_total(rawHeadId);
+          return { refreshed: true, method: 'revised_estimation_grand_total', headId: rawHeadId };
+        }
+        return { refreshed: false, method: 'none', headId: rawHeadId };
+      }
+
       default:
         throw new Error(`Unsupported bridge action: ${String(action || '')}`);
     }

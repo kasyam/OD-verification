@@ -2508,7 +2508,7 @@
         <div class="p3h-brand">
           <span>PRICE 3.0 Helper</span>
           <span class="p3h-brand-tag">v${escapeHtml(
-            (db && db.EXTENSION_VERSION) || '2.4.0'
+            (db && db.EXTENSION_VERSION) || '2.5.0'
           )}</span>
         </div>
         <div class="p3h-actions">
@@ -2964,7 +2964,10 @@
               target.closest('.p3h-cell-meta') ||
               target.closest('#p3h-drawer') ||
               target.closest('#p3h-drawer-backdrop') ||
-              target.closest('#p3h-register-modal'))
+              target.closest('#p3h-register-modal') ||
+              target.closest('#p3h-re-modal-overlay') ||
+              target.closest('#p3h-re-batch-btn') ||
+              target.closest('.p3h-re-trigger-btn'))
           ) {
             return;
           }
@@ -2983,7 +2986,7 @@
             t &&
               t.closest &&
               t.closest(
-                '#p3h-toolbar, #p3h-drawer, #p3h-drawer-backdrop, #p3h-register-modal, .p3h-cell-meta, #pt-file_table_list, .dataTables_wrapper'
+                '#p3h-toolbar, #p3h-drawer, #p3h-drawer-backdrop, #p3h-register-modal, .p3h-cell-meta, #pt-file_table_list, .dataTables_wrapper, #p3h-re-modal-overlay, #p3h-re-batch-btn, .p3h-re-trigger-btn'
               )
           );
         });

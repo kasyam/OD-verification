@@ -938,7 +938,7 @@
         const bestToken = tokens.htmlToken || tokens.jsonToken || tokens.headerToken || '';
 
         const hasPortalMarkers =
-          /pt-file_table_list|pt-side-menu-full|id=["']pt-info["']|id=["']pt-heading["']/i.test(
+          /pt-file_table_list|pt-side-menu-full|id=["']pt-info["']|id=["']pt-heading["']|estmeasureheaddetails|measurementcheckbox|itemHeadDesc|estimation_measurement/i.test(
             text
           );
         if (
@@ -1189,7 +1189,7 @@
     const s = String(html || '').trim();
     if (!s) return true;
     const hasKnownMarkers =
-      /pt-side-menu-full|pt-file_table_list|pt-specifications|pt-history_table|pd-attachment-table|durationYear|assemblyConstituencyCode|agreementNo|tsNumber|Administrative\s*Sanction|Site\s*Handover|MBook|activate_mbook/i.test(
+      /pt-side-menu-full|pt-file_table_list|pt-specifications|pt-history_table|pd-attachment-table|durationYear|assemblyConstituencyCode|agreementNo|tsNumber|Administrative\s*Sanction|Site\s*Handover|MBook|activate_mbook|estmeasureheaddetails|measurementcheckbox|itemHeadDesc|estimation_measurement/i.test(
         s
       );
     if (

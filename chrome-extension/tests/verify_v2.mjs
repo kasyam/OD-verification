@@ -39,6 +39,17 @@ class MiniElement {
     return this.children[0] || null;
   }
 
+  get nextElementSibling() {
+    if (!this.parentElement || !Array.isArray(this.parentElement.children)) return null;
+    const siblings = this.parentElement.children;
+    const idx = siblings.indexOf(this);
+    return idx >= 0 && idx + 1 < siblings.length ? siblings[idx + 1] : null;
+  }
+
+  get disabled() {
+    return this.hasAttribute('disabled');
+  }
+
   getAttribute(name) {
     return Object.prototype.hasOwnProperty.call(this.attrs, name) ? this.attrs[name] : null;
   }
@@ -154,6 +165,11 @@ function matchesSimpleSelector(el, sel) {
     if ((el.getAttribute('type') || '').toLowerCase() === 'hidden') return false;
     rem = rem.replace(':not([type="hidden"])', '');
   }
+  const notClassMatches = [];
+  rem = rem.replace(/:not\(\.([^)]+)\)/g, (_, clsName) => {
+    notClassMatches.push(clsName);
+    return '';
+  });
   const attrMatches = [];
   rem = rem.replace(/\[([^\]]+)\]/g, (_, inner) => {
     attrMatches.push(inner);
@@ -173,11 +189,22 @@ function matchesSimpleSelector(el, sel) {
     }
   }
 
+  for (const nc of notClassMatches) {
+    const cls = (el.className || '').split(/\s+/);
+    if (cls.includes(nc)) return false;
+  }
+
   for (const am of attrMatches) {
     const starEq = am.match(/^([a-zA-Z0-9_-]+)\*=["']?([^"']+)["']?$/);
     if (starEq) {
       const v = el.getAttribute(starEq[1]) || '';
       if (!v.includes(starEq[2])) return false;
+      continue;
+    }
+    const caretEq = am.match(/^([a-zA-Z0-9_-]+)\^=["']?([^"']+)["']?$/);
+    if (caretEq) {
+      const v = el.getAttribute(caretEq[1]) || '';
+      if (!v.startsWith(caretEq[2])) return false;
       continue;
     }
     const eq = am.match(/^([a-zA-Z0-9_-]+)=["']?([^"']+)["']?$/);
@@ -278,6 +305,7 @@ globalThis.DOMParser = class {
 const db = require('../db.js');
 const extractor = require('../extractor.js');
 const register = require('../register.js');
+const reBatch = require('../re-batch.js');
 const overlay = require('../overlay.js');
 
 // ---------------------------------------------------------------------------
@@ -1927,7 +1955,7 @@ const overlay = require('../overlay.js');
   const extDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const manifest = JSON.parse(fs.readFileSync(path.join(extDir, 'manifest.json'), 'utf8'));
   assert.equal(manifest.manifest_version, 3);
-  assert.equal(manifest.version, '2.4.0');
+  assert.equal(manifest.version, '2.5.0');
   assert.equal(manifest.background.service_worker, 'background.js');
   assert.equal(manifest.content_scripts.length, 2);
   assert.equal(manifest.content_scripts[0].world, 'MAIN');
@@ -1938,6 +1966,7 @@ const overlay = require('../overlay.js');
     'db.js',
     'extractor.js',
     'register.js',
+    're-batch.js',
     'overlay.js',
   ]);
 
@@ -3202,6 +3231,465 @@ const overlay = require('../overlay.js');
   const drawEv2 = dispatchedEvents.find((e) => e.type === 'p3h:dt:draw');
   assert.ok(drawEv2);
   assert.equal(JSON.parse(drawEv2.detail).pageChanged, false);
+}
+
+// ---------------------------------------------------------------------------
+// 12. v2.5.0 RE Preparation Batch "To Be Executed" Manager & Page Bridge
+// ---------------------------------------------------------------------------
+{
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const { fileURLToPath } = require('node:url');
+  const vm = require('node:vm');
+  const extDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+  // A. Row-anchored extractReSpecItems against live 3-row-per-item PRICE 3.0 RE HTML + .bg-fix row
+  const liveReHtml = `
+    <div id="pt-parent">
+      <div class="pt-left-est pt-left">
+        <div class="pt-number-scroll">
+          <div class="num-item">
+            <a href="javascript:void(0)" onclick="re_change_heading('2535244712')" class="active">
+              <input type="hidden" id="headorderNo2535244712" value="1">
+              <b class="num">1</b>
+              <span class="text">Repaires</span>
+            </a>
+            <input type="hidden" name="curheadid" id="curheadid" value="2535244712">
+          </div>
+          <div class="num-item">
+            <a href="javascript:void(0)" onclick="re_change_heading('2610451513')" class="">
+              <span class="text">Extra items</span>
+            </a>
+          </div>
+        </div>
+      </div>
+      <div id="specView">
+        <input type="hidden" id="isextraHead" value="false">
+        <table id="pt-specifications">
+          <tbody>
+            <tr class="current-specification">
+              <td colspan="4"><div class="sp-heading">Repaires</div></td>
+            </tr>
+            <!-- Item 1: Normal DSR -->
+            <tr id="td-26523254105" class="pt-sp-top specSelect specSelect26523254105">
+              <td class="text-center" onclick="re_to_be_executed(26523254105);">1</td>
+              <td colspan="2" onclick="re_to_be_executed(26523254105);"><span class="sp-version">1.15.3</span></td>
+              <td></td>
+            </tr>
+            <tr class="pt-sp-middle specSelect specSelect26523254105">
+              <td rowspan="2"></td>
+              <td colspan="3"><p class="sp-content">Rewiring for light point<br>Group C</p></td>
+            </tr>
+            <tr class="pt-sp-bottom text-end specSelect specSelect26523254105">
+              <td><span>25.0</span> <span>point</span></td>
+              <td><span>@ 1029.33</span></td>
+              <td><span class="amount-single"><span class="ricon">₹</span>25733.25</span></td>
+            </tr>
+            <!-- Item 2: OD item with .bg-fix secondary row that would misalign bookmarklet index zip -->
+            <tr id="td-25502958458" class="pt-sp-top specSelect specSelect25502958458 bg-fix">
+              <td class="text-center" onclick="re_to_be_executed(25502958458);">2</td>
+              <td colspan="2" onclick="re_to_be_executed(25502958458);"><span class="sp-version">OD167631/2025-2026</span></td>
+              <td></td>
+            </tr>
+            <tr class="pt-sp-middle bg-fix specSelect specSelect25502958458">
+              <td rowspan="3"></td>
+              <td colspan="3"><p class="sp-content">Supply and fixing of LED light fitting</p></td>
+            </tr>
+            <tr class="pt-sp-bottom bg-fix specSelect specSelect25502958458">
+              <td><span>11.0</span> <span>no</span></td>
+              <td><span>@ 1754.45</span></td>
+              <td><span class="amount-single"><span class="ricon">₹</span>19298.95</span></td>
+            </tr>
+            <tr class="pt-sp-bottom bg-fix specSelect specSelect25502958458">
+              <td><span>2.0</span> <span>no</span></td>
+              <td><span>@ 1500.00</span></td>
+              <td><span class="amount-single"><span class="ricon">₹</span>3000.00</span></td>
+            </tr>
+            <!-- Item 3: Zero qty/amount item -->
+            <tr id="td-25777971462" class="pt-sp-top specSelect specSelect25777971462">
+              <td class="text-center" onclick="re_to_be_executed(25777971462);">3</td>
+              <td colspan="2" onclick="re_to_be_executed(25777971462);"><span class="sp-version">OD170997/2025-2026</span></td>
+              <td></td>
+            </tr>
+            <tr class="pt-sp-middle specSelect specSelect25777971462">
+              <td rowspan="2"></td>
+              <td colspan="3"><p class="sp-content">Zero quantity executed item</p></td>
+            </tr>
+            <tr class="pt-sp-bottom text-end specSelect specSelect25777971462">
+              <td><span>0.0</span> <span>each</span></td>
+              <td><span>@ 500.00</span></td>
+              <td><span class="amount-single"><span class="ricon">₹</span>0.00</span></td>
+            </tr>
+            <!-- Item 4: Normal item AFTER .bg-fix item must keep exact amount & desc -->
+            <tr id="td-252001035085" class="pt-sp-top specSelect specSelect252001035085">
+              <td class="text-center" onclick="re_to_be_executed(252001035085);">4</td>
+              <td colspan="2" onclick="re_to_be_executed(252001035085);"><span class="sp-version">OD186826/2025-2026</span></td>
+              <td></td>
+            </tr>
+            <tr class="pt-sp-middle specSelect specSelect252001035085">
+              <td rowspan="2"></td>
+              <td colspan="3"><p class="sp-content">Post bg-fix item stays aligned</p></td>
+            </tr>
+            <tr class="pt-sp-bottom text-end specSelect specSelect252001035085">
+              <td><span>1.0</span> <span>no</span></td>
+              <td><span>@ 1601.64</span></td>
+              <td><span class="amount-single"><span class="ricon">₹</span>1601.64</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div id="pt-slide-right">
+        <ul id="tabs">
+          <li><a id="tobeexecuted" onclick="call_to_be_executed()">To Be Executed</a></li>
+          <li class="pt-tab-right">
+            <a id="user_address_button_delete" onclick="revised_estimation_Delete()">Delete</a>
+          </li>
+        </ul>
+      </div>
+    </div>
+  `;
+  const reDoc = parseMiniHtml(liveReHtml);
+  assert.equal(reBatch.isReEditorPresent(reDoc), true);
+  assert.equal(reBatch.isReEditorPresent(parseMiniHtml('<div><table id="pt-file_table_list"></table></div>')), false);
+
+  const extracted = reBatch.extractReSpecItems(reDoc);
+  assert.equal(extracted.headingName, 'Repaires');
+  assert.equal(extracted.headId, '2535244712');
+  assert.equal(extracted.isExtraHead, false);
+  assert.equal(extracted.items.length, 4);
+
+  assert.deepEqual(
+    extracted.items.map((x) => ({
+      slNo: x.slNo,
+      headspecid: x.headspecid,
+      specCode: x.specCode,
+      qty: x.qty,
+      amount: x.amount,
+      isBgFix: x.isBgFix,
+    })),
+    [
+      { slNo: '1', headspecid: '26523254105', specCode: '1.15.3', qty: 25, amount: 25733.25, isBgFix: false },
+      { slNo: '2', headspecid: '25502958458', specCode: 'OD167631/2025-2026', qty: 11, amount: 19298.95, isBgFix: true },
+      { slNo: '3', headspecid: '25777971462', specCode: 'OD170997/2025-2026', qty: 0, amount: 0, isBgFix: false },
+      { slNo: '4', headspecid: '252001035085', specCode: 'OD186826/2025-2026', qty: 1, amount: 1601.64, isBgFix: false },
+    ]
+  );
+  assert.equal(extracted.items[0].desc, 'Rewiring for light point | Group C');
+  assert.equal(extracted.items[3].desc, 'Post bg-fix item stays aligned');
+
+  // B. parseToBeExecutedHtml across all branches
+  const tbeListHtml = `
+    <form id="estimation_measurement">
+      <input type="checkbox" id="estmeasureheaddetails" name="measurementcheckbox" value="all">
+      <input type="checkbox" class="measurementcheckboxes" name="measurementcheckbox" value="9001">
+      <input type="checkbox" class="measurementcheckboxes" name="measurementcheckbox" value="9002">
+      <input type="checkbox" class="measurementcheckboxes" name="measurementcheckbox" value="9002">
+      <input type="checkbox" class="measurementcheckboxes" name="measurementcheckbox" value="9003" disabled>
+      <button class="pt-btn" onclick="save_re_to_be_executed(26523254105)">Save</button>
+    </form>
+  `;
+  const pHas = reBatch.parseToBeExecutedHtml(tbeListHtml, '26523254105');
+  assert.equal(pHas.kind, 'has_measurements');
+  assert.deepEqual(pHas.measurementIds, ['9001', '9002']);
+  assert.equal(pHas.count, 2);
+
+  const pMismatch = reBatch.parseToBeExecutedHtml(tbeListHtml, '9999999');
+  assert.equal(pMismatch.kind, 'error');
+  assert.match(pMismatch.error, /mismatch/i);
+
+  const pEmptyForm = reBatch.parseToBeExecutedHtml(
+    `<form id="estimation_measurement"><input type="text" name="itemHeadDesc" value=""><button class="pt-popaddMeasureForm" onclick="save_re_to_be_executed(25777971462)">Save</button></form>`,
+    '25777971462'
+  );
+  assert.equal(pEmptyForm.kind, 'empty');
+
+  const pJsonEmpty = reBatch.parseToBeExecutedHtml(
+    JSON.stringify({ token: 't2', busstatus: 'F', message: 'No measurements found' })
+  );
+  assert.equal(pJsonEmpty.kind, 'empty');
+
+  const pJsonSession = reBatch.parseToBeExecutedHtml(JSON.stringify({ status: 'A' }));
+  assert.equal(pJsonSession.kind, 'session_expired');
+
+  const pPortalErr = reBatch.parseToBeExecutedHtml('<html><body>Oops! Something went wrong</body></html>');
+  assert.equal(pPortalErr.kind, 'error');
+
+  // C. parseDeleteReResponse across JSON and HTML responses
+  const dOk = reBatch.parseDeleteReResponse(
+    JSON.stringify({
+      token: 't3',
+      busstatus: 'T',
+      message: 'Deleted Successfully',
+      estheadspecid: '26523254105',
+      headid: '2535244712',
+      url: 'call_to_be_executed.pro',
+    })
+  );
+  assert.equal(dOk.ok, true);
+  assert.equal(dOk.headid, '2535244712');
+  assert.equal(dOk.estheadspecid, '26523254105');
+
+  assert.equal(
+    reBatch.parseDeleteReResponse(JSON.stringify({ busstatus: 'F', message: 'Cannot delete' })).ok,
+    false
+  );
+  assert.equal(
+    reBatch.parseDeleteReResponse(JSON.stringify({ status: 'A' })).sessionExpired,
+    true
+  );
+  assert.equal(
+    reBatch.parseDeleteReResponse('<form id="estimation_measurement"><input name="itemHeadDesc"></form>').ok,
+    true
+  );
+  assert.equal(
+    reBatch.parseDeleteReResponse('<input type="checkbox" class="measurementcheckboxes" name="measurementcheckbox" value="9001">').ok,
+    false
+  );
+
+  // D. Sequential scanItemsTbe & deleteItemsTbe (unscanned, cached, retry-cleared, stop, sessionExpired)
+  {
+    const scanCalls = [];
+    let cancelScan = false;
+    const scanRes = await reBatch.scanItemsTbe(extracted.items.slice(0, 3), {
+      isCancelled: () => cancelScan,
+      postForm: async (ep, params) => {
+        scanCalls.push({ ep, params });
+        if (params.headspecid === '26523254105') return tbeListHtml;
+        if (params.headspecid === '25502958458') {
+          cancelScan = true; // cancel right after item 2 returns so item 3 is skipped safely
+          return `<form id="estimation_measurement"><input name="itemHeadDesc"></form>`;
+        }
+        return tbeListHtml;
+      },
+    });
+    assert.equal(scanCalls.length, 2);
+    assert.equal(scanRes.scanned, 2);
+    assert.equal(scanRes.withTbe, 1);
+    assert.equal(scanRes.empty, 1);
+    assert.equal(scanRes.stopped, true);
+    assert.equal(scanRes.resultsBySpecId.get('26523254105').count, 2);
+    assert.equal(scanRes.resultsBySpecId.get('25502958458').kind, 'empty');
+
+    // Session expired during scan halts immediately
+    const scanExp = await reBatch.scanItemsTbe(extracted.items.slice(0, 2), {
+      postForm: async () => {
+        throw new Error('SESSION_EXPIRED');
+      },
+    });
+    assert.equal(scanExp.sessionExpired, true);
+    assert.equal(scanExp.errors, 1);
+  }
+
+  {
+    // Unscanned delete: 2 POSTs for item with TBE, 1 POST + skipped for empty item
+    const calls = [];
+    const res1 = await reBatch.deleteItemsTbe([extracted.items[0], extracted.items[2]], {
+      retryDelayMs: 0,
+      postForm: async (ep, params) => {
+        calls.push({ ep, params });
+        if (ep === 'call_to_be_executed.pro') {
+          return params.headspecid === '26523254105'
+            ? tbeListHtml
+            : `<form id="estimation_measurement"><input name="itemHeadDesc"></form>`;
+        }
+        if (ep === 'delete_re_to_be_executed.pro') {
+          return JSON.stringify({
+            busstatus: 'T',
+            message: 'Deleted',
+            estheadspecid: params.headspecid,
+            headid: '2535244712',
+          });
+        }
+        throw new Error('Unexpected endpoint ' + ep);
+      },
+    });
+    assert.equal(calls.length, 3);
+    assert.equal(calls[0].ep, 'call_to_be_executed.pro');
+    assert.equal(calls[1].ep, 'delete_re_to_be_executed.pro');
+    assert.equal(calls[1].params.colList, '9001,9002');
+    assert.equal(calls[1].params.headspecid, '26523254105');
+    assert.equal(calls[2].ep, 'call_to_be_executed.pro');
+    assert.equal(res1.deleted, 1);
+    assert.equal(res1.skipped, 1);
+    assert.equal(res1.errors, 0);
+    assert.equal(res1.lastHeadId, '2535244712');
+
+    // Pre-scanned cached delete: 1 POST for item with cached TBE IDs, 0 POSTs for empty cached item
+    const cachedCalls = [];
+    const cachedMap = new Map([
+      ['26523254105', ['9001', '9002']],
+      ['25777971462', []],
+    ]);
+    const resCached = await reBatch.deleteItemsTbe([extracted.items[0], extracted.items[2]], {
+      cachedIdsBySpecId: cachedMap,
+      retryDelayMs: 0,
+      postForm: async (ep, params) => {
+        cachedCalls.push({ ep, params });
+        return JSON.stringify({
+          busstatus: 'T',
+          message: 'Deleted',
+          estheadspecid: params.headspecid,
+          headid: '2535244712',
+        });
+      },
+    });
+    assert.equal(cachedCalls.length, 1);
+    assert.equal(cachedCalls[0].ep, 'delete_re_to_be_executed.pro');
+    assert.equal(cachedCalls[0].params.colList, '9001,9002');
+    assert.equal(resCached.deleted, 1);
+    assert.equal(resCached.skipped, 1);
+
+    // Retry pass: pass 0 delete fails after server already deleted -> retry sees empty -> resolves as deleted!
+    let pass0DeleteCalled = false;
+    const retryCalls = [];
+    const resRetry = await reBatch.deleteItemsTbe([extracted.items[0]], {
+      cachedIdsBySpecId: new Map([['26523254105', ['9001']]]),
+      maxRetries: 1,
+      retryDelayMs: 0,
+      postForm: async (ep, params) => {
+        retryCalls.push(ep);
+        if (ep === 'delete_re_to_be_executed.pro' && !pass0DeleteCalled) {
+          pass0DeleteCalled = true;
+          throw new Error('TIMEOUT');
+        }
+        if (ep === 'call_to_be_executed.pro') {
+          return `<form id="estimation_measurement"><input name="itemHeadDesc"></form>`;
+        }
+        throw new Error('Unexpected call');
+      },
+    });
+    assert.deepEqual(retryCalls, ['delete_re_to_be_executed.pro', 'call_to_be_executed.pro']);
+    assert.equal(resRetry.deleted, 1);
+    assert.equal(resRetry.errors, 0);
+    assert.equal(resRetry.resultsBySpecId.get('26523254105').note, 'Verified cleared on retry');
+
+    // Safe stop between items and immediate halt on SESSION_EXPIRED
+    let cancelDel = false;
+    const resStop = await reBatch.deleteItemsTbe([extracted.items[0], extracted.items[3]], {
+      isCancelled: () => cancelDel,
+      retryDelayMs: 0,
+      postForm: async (ep, params) => {
+        if (ep === 'call_to_be_executed.pro') return tbeListHtml;
+        cancelDel = true;
+        return JSON.stringify({ busstatus: 'T', headid: '2535244712', estheadspecid: params.headspecid });
+      },
+    });
+    assert.equal(resStop.stopped, true);
+    assert.equal(resStop.deleted, 1);
+    assert.equal(resStop.resultsBySpecId.has('252001035085'), false);
+
+    const resExp = await reBatch.deleteItemsTbe([extracted.items[0], extracted.items[3]], {
+      retryDelayMs: 0,
+      postForm: async () => {
+        throw new Error('SESSION_EXPIRED');
+      },
+    });
+    assert.equal(resExp.sessionExpired, true);
+    assert.equal(resExp.errors, 1);
+  }
+
+  // E. page-bridge.js VM tests for re:getContext & re:refreshAfterDelete + zero window globals
+  {
+    const bridgeListeners = {};
+    const dispatchedEvents = [];
+    const calledOps = [];
+    let formOpenFlag = '0';
+    let hasHeadOrderNode = true;
+
+    const reSandbox = {
+      Symbol,
+      Set,
+      WeakMap,
+      Array,
+      JSON,
+      String,
+      Boolean,
+      Number,
+      Error,
+      CustomEvent: class {
+        constructor(type, init) {
+          this.type = type;
+          this.detail = init && init.detail;
+        }
+      },
+      document: {
+        querySelector: () => null,
+        querySelectorAll: () => [],
+        getElementById: (id) => (id === 'headorderNo2535244712' && hasHeadOrderNode ? { id } : null),
+        addEventListener: (name, fn) => {
+          bridgeListeners[name] = fn;
+        },
+        dispatchEvent: (ev) => {
+          dispatchedEvents.push(ev);
+        },
+      },
+      window: {
+        CURHEADID: '2535244712',
+        SELTAB: 'AH',
+        SELITEM: '26523254105',
+        checkMeasurementTabExists: () => formOpenFlag,
+        re_change_heading: (hid) => calledOps.push(['re_change_heading', hid]),
+        call_left_spec_list: (hid, sid) => calledOps.push(['call_left_spec_list', hid, sid]),
+      },
+    };
+    vm.createContext(reSandbox);
+    vm.runInContext(fs.readFileSync(path.join(extDir, 'page-bridge.js'), 'utf8'), reSandbox, {
+      filename: 'page-bridge.js',
+    });
+
+    // Zero new globals added to sandbox.window
+    assert.deepEqual(
+      Object.keys(reSandbox.window).sort(),
+      ['CURHEADID', 'SELITEM', 'SELTAB', 'call_left_spec_list', 'checkMeasurementTabExists', 're_change_heading']
+    );
+
+    const callBridge = (action, payload) => {
+      dispatchedEvents.length = 0;
+      bridgeListeners['p3h:bridge:req']({
+        detail: JSON.stringify({ id: 'req1', action, payload }),
+      });
+      const ev = dispatchedEvents.find((e) => e.type === 'p3h:bridge:res');
+      assert.ok(ev);
+      return JSON.parse(ev.detail).result;
+    };
+
+    const ctx = callBridge('re:getContext', {});
+    assert.deepEqual(ctx, {
+      curHeadId: '2535244712',
+      selTab: 'AH',
+      selItem: '26523254105',
+      hasMeasurementFormOpen: false,
+      canRefreshHeading: true,
+      canRefreshLeftList: true,
+    });
+
+    const refHeading = callBridge('re:refreshAfterDelete', { headId: '2535244712', lastHeadSpecId: '26523254105' });
+    assert.deepEqual(refHeading, { refreshed: true, method: 're_change_heading', headId: '2535244712' });
+    assert.deepEqual(calledOps, [['re_change_heading', '2535244712']]);
+
+    // When measurement form is open -> falls back to call_left_spec_list
+    calledOps.length = 0;
+    formOpenFlag = '1';
+    const refFallback1 = callBridge('re:refreshAfterDelete', { headId: '2535244712', lastHeadSpecId: '26523254105' });
+    assert.deepEqual(refFallback1, { refreshed: true, method: 'call_left_spec_list', headId: '2535244712' });
+    assert.deepEqual(calledOps, [['call_left_spec_list', '2535244712', '26523254105']]);
+
+    // When #headorderNo<headId> is missing -> falls back to call_left_spec_list
+    calledOps.length = 0;
+    formOpenFlag = '0';
+    hasHeadOrderNode = false;
+    const refFallback2 = callBridge('re:refreshAfterDelete', { headId: '2535244712', lastHeadSpecId: '26523254105' });
+    assert.deepEqual(refFallback2, { refreshed: true, method: 'call_left_spec_list', headId: '2535244712' });
+    assert.deepEqual(calledOps, [['call_left_spec_list', '2535244712', '26523254105']]);
+  }
+
+  // F. Static MutationObserver exclusion checks in overlay.js & re-batch.js
+  const overlaySrcCheck = fs.readFileSync(path.join(extDir, 'overlay.js'), 'utf8');
+  const reBatchSrcCheck = fs.readFileSync(path.join(extDir, 're-batch.js'), 'utf8');
+  for (const src of [overlaySrcCheck, reBatchSrcCheck]) {
+    assert.ok(src.includes('#p3h-re-modal-overlay'));
+    assert.ok(src.includes('#p3h-re-batch-btn'));
+  }
 }
 
 console.log('ALL_P3H_V2_UNIT_TESTS_PASSED');
