@@ -1588,8 +1588,8 @@
     const act = String((row && (row.activityName || row.activityNames)) || '').trim();
     const code = String((row && row.estimateCode) || '').trim();
     return (
-      (fileNo ? `<div class="p3h-stacked-main">${escapeHtml(fileNo)}</div>` : '') +
       (subj ? `<div class="p3h-work-cell-subj">${escapeHtml(subj)}</div>` : '') +
+      (fileNo ? `<div class="p3h-work-cell-file">${escapeHtml(fileNo)}</div>` : '') +
       (act
         ? `<div class="p3h-work-cell-act">${escapeHtml(act)}${
             code ? ` <span class="act-code">[${escapeHtml(code)}]</span>` : ''
@@ -1606,6 +1606,10 @@
     const ext = getExtractor();
     if (col.key === 'slNo') return escapeHtml(idxText);
     if (col.key === 'workDetails') return renderWorkDetailsReportHtml(row);
+    if (col.key === 'subject') {
+      const subj = String(formatCellValue(col, row) || '').trim();
+      return subj ? `<div class="p3h-work-cell-subj">${escapeHtml(subj)}</div>` : '';
+    }
     if (col.key === 'totalActiveAmount') return renderFinancialCellHtml(row, ext);
     if (col.key === 'completionDate') return renderDueDateColumnHtml(row);
     if (col.key === 'asNoDate') return renderStackedNoDateHtml(row.asNo, row.asDate);
@@ -1761,8 +1765,7 @@
   .no-print { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 6px; margin-bottom: 14px; }
   .btn { padding: 7px 14px; border-radius: 6px; border: 1px solid #1d4ed8; background: #1d4ed8; color: #fff; font-weight: 600; cursor: pointer; font-size: 12px; }
   .btn:hover { background: #1e40af; }
-  h1 { font-size: 17px; margin: 0 0 4px 0; }
-  .meta { font-size: 11px; color: #475569; margin-bottom: 12px; line-height: 1.5; }
+  h1 { font-size: 17px; margin: 0 0 10px 0; }
   table { width: 100%; border-collapse: collapse; }
   th, td { border: 1px solid #cbd5e1; padding: 5px 6px; text-align: left; vertical-align: top; }
   thead th { background: #1e293b; color: #ffffff; font-weight: 600; white-space: nowrap; }
@@ -1774,12 +1777,13 @@
   .act-code { font-weight: 400; color: #64748b; font-size: 10px; }
   .p3h-stacked-main { font-weight: 600; }
   .p3h-stacked-sub { font-size: 10px; color: #475569; margin-top: 1px; }
-  .p3h-work-cell-subj { font-size: 10.5px; color: #1e293b; margin-top: 2px; line-height: 1.3; }
-  .p3h-work-cell-act { font-size: 10px; color: #0f766e; font-weight: 600; margin-top: 2px; }
+  .p3h-work-cell-subj { font-size: 13px; font-weight: 700; color: #0f172a; margin-top: 0; line-height: 1.35; }
+  .p3h-work-cell-file { font-size: 10.5px; color: #475569; font-weight: 600; margin-top: 2px; }
+  .p3h-work-cell-act { font-size: 10.5px; color: #0f766e; font-weight: 600; margin-top: 2px; }
   .p3h-fin-cell { text-align: right; }
   .p3h-fin-pct { font-weight: 700; color: #0f172a; }
   .p3h-fin-amt { font-size: 10px; color: #475569; }
-  .ext-tag { display: inline-block; padding: 0 4px; border-radius: 3px; background: #fef3c7; color: #92400e; font-size: 9.5px; font-weight: 600; }
+  .ext-tag { display: inline-block; padding: 0 4px; border-radius: 3px; background: #fef3c7; color: #92400e; font-size: 10px; font-weight: 600; }
   .num { text-align: right; white-space: nowrap; }
   @media print { .no-print { display: none; } body { margin: 0; } }
 </style>
@@ -1790,10 +1794,6 @@
     <button type="button" class="btn" id="p3h-report-print-btn">Print / Save as PDF</button>
   </div>
   <h1>${escapeHtml(title || 'PRICE 3.0 Project Register Report')}</h1>
-  <div class="meta">
-    <div><strong>Generated:</strong> ${escapeHtml(new Date().toLocaleString())} &nbsp;|&nbsp; <strong>Mode:</strong> ${escapeHtml(modeTag)} &nbsp;|&nbsp; <strong>Records:</strong> ${includedRows.length} &nbsp;|&nbsp; <strong>Sorted By:</strong> ${escapeHtml(sortSummary || 'Default')}</div>
-    <div><strong>Applied Filters:</strong> ${escapeHtml(filterSummary || 'All Works')}</div>
-  </div>
   <table>
     <thead><tr>${cols.map((c) => `<th${c.type === 'money' || c.type === 'number' ? ' class="num"' : ''}>${escapeHtml(c.label)}</th>`).join('')}</tr></thead>
     <tbody>${bodyParts.join('')}</tbody>

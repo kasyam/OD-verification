@@ -1864,6 +1864,50 @@ const overlay = require('../overlay.js');
   assert.equal(noSlHtml.includes('onclick='), false);
   assert.ok(noSlHtml.includes('<th>Total</th><th class="num">₹5,00,000.00</th>'));
 
+  // G2. Report header cleanup, prominent project name, and >=75% font-size floor
+  const actRows11051 = register.buildActivityRegisterRows([mixedWork11051], 'all', '22-11-2026');
+  const workDetailsReportHtml = register.buildReportHtml({
+    title: 'Project Prominence Check',
+    rows: actRows11051,
+    selectedKeys: ['slNo', 'workDetails', 'totalActiveAmount'],
+    filterSummary: 'View: Activity-wise | Scope: active',
+    sortSummary: 'Constituency (LAC) (Ascending)',
+    viewMode: 'activity',
+  });
+  assert.equal(workDetailsReportHtml.includes('Generated:'), false);
+  assert.equal(workDetailsReportHtml.includes('Sorted By:'), false);
+  assert.equal(workDetailsReportHtml.includes('Applied Filters:'), false);
+  assert.equal(workDetailsReportHtml.includes('class="meta"'), false);
+  const subjTag = '<div class="p3h-work-cell-subj">Mixed Deactivated DPR + Final Work</div>';
+  const fileTag = '<div class="p3h-work-cell-file">PWD/BLDG/FL/11051/2024</div>';
+  assert.ok(workDetailsReportHtml.includes(subjTag));
+  assert.ok(workDetailsReportHtml.includes(fileTag));
+  assert.ok(workDetailsReportHtml.indexOf(subjTag) < workDetailsReportHtml.indexOf(fileTag));
+
+  const standaloneSubjHtml = register.buildReportHtml({
+    title: 'Standalone Subject Check',
+    rows: actRows11051,
+    selectedKeys: ['slNo', 'fileNumber', 'subject'],
+    filterSummary: 'All Works',
+    sortSummary: 'Default',
+    viewMode: 'activity',
+  });
+  assert.ok(standaloneSubjHtml.includes(subjTag));
+
+  const styleMatch = workDetailsReportHtml.match(/<style>([\s\S]*?)<\/style>/);
+  assert.ok(styleMatch);
+  const styleText = styleMatch[1];
+  const subjRuleMatch = styleText.match(/\.p3h-work-cell-subj\s*\{([^}]+)\}/);
+  assert.ok(subjRuleMatch);
+  assert.ok(/font-size:\s*13px/.test(subjRuleMatch[1]));
+  assert.ok(/font-weight:\s*700/.test(subjRuleMatch[1]));
+  const fontSizes = Array.from(styleText.matchAll(/font-size:\s*([0-9.]+)px/g), (m) => Number(m[1]));
+  assert.ok(fontSizes.length > 0);
+  const minAllowedPx = 13 * 0.75;
+  fontSizes.forEach((sz) => {
+    assert.ok(sz >= minAllowedPx, `Expected report font-size ${sz}px >= ${minAllowedPx}px`);
+  });
+
   // H. Overlay exported filter helpers
   assert.equal(overlay.isFullyManuallyArchived(mixedWork11051, sum11051), false);
   assert.equal(overlay.matchesFilter(sum11051, mixedWork11051, 'final', 'all'), true);
