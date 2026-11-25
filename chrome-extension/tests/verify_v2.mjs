@@ -3658,6 +3658,9 @@ const overlay = require('../overlay.js');
       curHeadId: '2535244712',
       selTab: 'AH',
       selItem: '26523254105',
+      gestId: '',
+      estEditId: '',
+      headOrderNo: '',
       hasMeasurementFormOpen: false,
       canRefreshHeading: true,
       canRefreshLeftList: true,
@@ -3681,6 +3684,17 @@ const overlay = require('../overlay.js');
     const refFallback2 = callBridge('re:refreshAfterDelete', { headId: '2535244712', lastHeadSpecId: '26523254105' });
     assert.deepEqual(refFallback2, { refreshed: true, method: 'call_left_spec_list', headId: '2535244712' });
     assert.deepEqual(calledOps, [['call_left_spec_list', '2535244712', '26523254105']]);
+
+    // When SELTAB === 'AM' and re_to_be_executed exists -> fallback also refreshes active right-pane TBE list
+    calledOps.length = 0;
+    reSandbox.window.SELTAB = 'AM';
+    reSandbox.window.re_to_be_executed = (sid) => calledOps.push(['re_to_be_executed', sid]);
+    const refFallback3 = callBridge('re:refreshAfterDelete', { headId: '2535244712', lastHeadSpecId: '26523254105' });
+    assert.deepEqual(refFallback3, { refreshed: true, method: 'call_left_spec_list', headId: '2535244712' });
+    assert.deepEqual(calledOps, [
+      ['call_left_spec_list', '2535244712', '26523254105'],
+      ['re_to_be_executed', '26523254105'],
+    ]);
   }
 
   // F. Static MutationObserver exclusion checks in overlay.js & re-batch.js
@@ -3689,7 +3703,1263 @@ const overlay = require('../overlay.js');
   for (const src of [overlaySrcCheck, reBatchSrcCheck]) {
     assert.ok(src.includes('#p3h-re-modal-overlay'));
     assert.ok(src.includes('#p3h-re-batch-btn'));
+    assert.ok(src.includes('#p3h-re-helper-btn'));
+    assert.ok(src.includes('.p3h-re-item-helper'));
   }
+}
+
+// ---------------------------------------------------------------------------
+// 13. RE DPR & e-MBook Quantity Helper (PoC Live Fixtures: 93382/2021 RE 3)
+// ---------------------------------------------------------------------------
+{
+  // A. Multi-activity RE Context Resolver (matches Electrical 17_1_1 vs Civil 9_1_1)
+  const multiActivityReDoc = parseMiniHtml(`
+    <div>
+      <ul id="pt-side-menu-full">
+        <li>
+          <span>work</span>
+          <ul>
+            <li>
+              <span>Composite Civil Work[PWD/BLDG/EST/93382/2021_9_1_1]</span>
+              <ul>
+                <li><a onclick="call_basicestimation('tok','233655521')">DPR</a></li>
+                <li><a onclick="callembook('234143')">eMbook</a></li>
+                <li><a onclick="callre('234181')">Revised Estimate</a></li>
+              </ul>
+            </li>
+            <li>
+              <span>Composite Electrical Work[PWD/BLDG/EST/93382/2021_17_1_1]</span>
+              <ul>
+                <li><a onclick="call_basicestimation('tok','237685685')">DPR</a></li>
+                <li><a onclick="callembook('234144')">eMbook</a></li>
+                <li><a onclick="callre('234307')">Revised Estimate</a></li>
+              </ul>
+            </li>
+          </ul>
+        </li>
+      </ul>
+      <div id="pt-heading">
+        <h6 class="heading">[ PWD/BLDG/EST/93382/2021_17_1_1/RE 3 ] NABARD-Construction of New Block at FHC Koodal</h6>
+      </div>
+      <div id="pt-parent">
+        <input type="hidden" id="estEditId" value="23021474307">
+        <div class="pt-left-est">
+          <div class="pt-number-scroll">
+            <a onclick="re_change_heading('231119132')" class="active">
+              <input type="hidden" id="headorderNo231119132" value="1">
+              <b class="num">1</b><span class="text">Electrification</span>
+            </a>
+          </div>
+        </div>
+        <div id="specView">
+          <input type="hidden" id="isextraHead" value="false">
+          <table id="pt-specifications">
+            <tbody>
+              <tr class="current-specification"><td colspan="4"><div class="sp-heading">Electrification</div></td></tr>
+              <tr id="td-23909194064" class="pt-sp-top specSelect specSelect23909194064">
+                <td class="text-center" onclick="re_to_be_executed(23909194064);">1</td>
+                <td colspan="2" onclick="re_to_be_executed(23909194064);"><span class="sp-version">1.10.3</span></td>
+                <td></td>
+              </tr>
+              <tr class="pt-sp-middle specSelect specSelect23909194064">
+                <td rowspan="2"></td>
+                <td colspan="3"><p class="sp-content">Wiring for light point Group C</p><div class="pt-wz"></div></td>
+              </tr>
+              <tr class="pt-sp-bottom specSelect specSelect23909194064">
+                <td><span>366.0</span> <span>point</span></td>
+                <td><span>@ 1192.56</span></td>
+                <td><span class="amount-single">₹436476.96</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div id="pt-slide-right">
+          <ul id="tabs">
+            <li class="pt-tab-right">
+              <a id="updateMeasurementsMbook" onclick="updateREMbookMeasurements('2685432619')">Sync</a>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  `);
+
+  const reCtx = reBatch.resolveReWorkContext(multiActivityReDoc, {
+    curHeadId: '231119132',
+    selTab: 'AM',
+    selItem: '23909194064',
+    headOrderNo: '1',
+    estEditId: '23021474307',
+  });
+  assert.equal(reCtx.reEstId, '2685432619');
+  assert.equal(reCtx.estEditId, '23021474307');
+  assert.equal(reCtx.headId, '231119132');
+  assert.equal(reCtx.headOrderNo, '1');
+  assert.equal(reCtx.baseEstimateCode, 'PWD/BLDG/EST/93382/2021_17_1_1');
+  assert.equal(reCtx.activityId, '234144');
+  assert.equal(reCtx.dprEstId, '237685685');
+  assert.equal(reCtx.estMainId, '234307');
+  assert.equal(reCtx.activityName, 'Composite Electrical Work');
+
+  // B. 17-column Deviation Statement Parser (16-td bottom row due to rowspan=3)
+  const devHtml = `
+    <table id="pt-specifications">
+      <thead>
+        <tr><th rowspan="2">No</th><th colspan="3">Original Estimate</th></tr>
+        <tr><th>Quantity</th><th>Rate</th><th>Amount</th></tr>
+      </thead>
+      <tbody>
+        <tr><td colspan="17">Electrification</td></tr>
+        <!-- Item 1: 1.10.3 doubled (183 + 183 = 366) -->
+        <tr>
+          <td rowspan="3">1</td><td>1.10.3</td><td>point</td>
+          <td><a id="add23909194064" onclick="addRESpecRemark(23909194064)">Remark</a></td>
+        </tr>
+        <tr><td colspan="16">Wiring for light point Group C</td></tr>
+        <tr>
+          <td>183.000</td><td>1192.56</td><td>218238.48</td><td>N.A</td><td>N.A</td>
+          <td>183.000</td><td>183.000</td><td>366.000</td><td>1192.56</td><td>436476.96</td>
+          <td>0.00</td><td>-218238.48</td><td>N.A</td><td>N.A</td><td>N.A</td><td>100.00</td>
+        </tr>
+        <!-- Item 4: 1.11 no MBook yet (0 exec, 8 TBE) -->
+        <tr>
+          <td rowspan="3">4</td><td>1.11</td><td>point</td>
+          <td><a id="add23307194047">Remark</a></td>
+        </tr>
+        <tr><td colspan="16">Wiring for twin control light point</td></tr>
+        <tr>
+          <td>8.000</td><td>1273.30</td><td>10186.40</td><td>N.A</td><td>N.A</td>
+          <td>0.000</td><td>8.000</td><td>8.000</td><td>1273.30</td><td>10186.40</td>
+          <td>0.00</td><td>0.00</td><td>N.A</td><td>N.A</td><td>N.A</td><td>0.00</td>
+        </tr>
+        <!-- Item 5: 90.3.10 negative deduction net MBook (5.6 exec) without #add icon (tests Sl/Code fallback) -->
+        <tr>
+          <td rowspan="3">5</td><td>90.3.10</td><td>each</td><td></td>
+        </tr>
+        <tr><td colspan="16">Extra H.G conduit down rod</td></tr>
+        <tr>
+          <td>61.000</td><td>236.33</td><td>14416.13</td><td>N.A</td><td>N.A</td>
+          <td>5.600</td><td>61.000</td><td>66.600</td><td>236.33</td><td>15739.58</td>
+          <td>0.00</td><td>-1323.45</td><td>N.A</td><td>N.A</td><td>N.A</td><td>9.18</td>
+        </tr>
+        <!-- Item 58: 90.16.1.6 with pending AE entries -->
+        <tr>
+          <td rowspan="3">58</td><td>90.16.1.6</td><td>metre</td>
+          <td><a id="add23510194145">Remark</a></td>
+        </tr>
+        <tr><td colspan="16">Cable supply and drawing</td></tr>
+        <tr>
+          <td>250.000</td><td>100.00</td><td>25000.00</td><td>N.A</td><td>N.A</td>
+          <td>62.000</td><td>250.000</td><td>312.000</td><td>100.00</td><td>31200.00</td>
+          <td>0.00</td><td>-6200.00</td><td>N.A</td><td>N.A</td><td>N.A</td><td>24.80</td>
+        </tr>
+      </tbody>
+    </table>
+  `;
+  const devParsed = reBatch.parseReDeviationStatementHtml(devHtml);
+  assert.equal(devParsed.ok, true);
+  assert.equal(devParsed.items.length, 4);
+  assert.equal(devParsed.bySpecId.get('23909194064').dprQty, 183);
+  assert.equal(devParsed.bySpecId.get('23909194064').reExecutedQty, 183);
+  assert.equal(devParsed.bySpecId.get('23909194064').reTbeQty, 183);
+  assert.equal(devParsed.bySpecId.get('23909194064').reTotalQty, 366);
+  assert.equal(devParsed.bySlAndCode.get('5|90.3.10').reExecutedQty, 5.6);
+
+  // C. e-MBook Spec Totals (#spectotal) & AE Pending Inbox (with deduplication & negative deduction)
+  const mbHeadHtml = `
+    <table id="pt-specifications">
+      <tr><td><b id="spectotal23909194064">183.0</b></td></tr>
+      <tr><td><b id="spectotal23534194048">5.6</b></td></tr>
+      <tr><td><b id="spectotal23510194145">151.4</b></td></tr>
+    </table>
+  `;
+  const mbTotalsParsed = reBatch.parseEmbookSpecTotalsHtml(mbHeadHtml);
+  assert.equal(mbTotalsParsed.ok, true);
+  assert.equal(mbTotalsParsed.totalsBySpecId.get('23909194064'), 183);
+  assert.equal(mbTotalsParsed.totalsBySpecId.get('23534194048'), 5.6);
+  assert.equal(mbTotalsParsed.totalsBySpecId.get('23510194145'), 151.4);
+
+  const mbPendingHtml = `
+    <table id="pt-specifications">
+      <tr class="pt-sp-middle">
+        <td colspan="5" onclick="selectSpec('head1'); callnewmeasurementright_pending('23510194145','234144','27001')">Item 58 entry 1</td>
+      </tr>
+      <tr><td colspan="3"><b>Total</b></td><td><b>90.00000</b></td><td><b>metre</b></td></tr>
+      <!-- Duplicate entry ID should be deduplicated -->
+      <tr class="pt-sp-middle">
+        <td colspan="5" onclick="callnewmeasurementright_pending('23510194145','234144','27001')">Duplicate</td>
+      </tr>
+      <tr><td colspan="3"><b>Total</b></td><td><b>90.00000</b></td><td><b>metre</b></td></tr>
+      <!-- Negative deduction pending entry on same item: 90 - 0.6 = 89.4 -->
+      <tr class="pt-sp-middle">
+        <td colspan="5" onclick="callnewmeasurementright_pending('23510194145','234144','27002')">Item 58 deduction</td>
+      </tr>
+      <tr><td colspan="3"><b>Total</b></td><td><b>-0.60000</b></td><td><b>metre</b></td></tr>
+    </table>
+  `;
+  const mbPendParsed = reBatch.parseMbookPendingAeHtml(mbPendingHtml);
+  assert.equal(mbPendParsed.ok, true);
+  assert.deepEqual(mbPendParsed.pendingBySpecId.get('23510194145'), {
+    pendingQty: 89.4,
+    entryCount: 2,
+  });
+
+  // D. Fallback DPR parser (approvedEstimationView / showApprovedHeadSpecs)
+  const dprHtml = `
+    <table id="pt-specifications">
+      <tr class="pt-sp-top specSelect specSelect23909194064" onclick="showApprovedMeasurementHeadingList('23909194064')">
+        <td rowspan="3">1</td><td colspan="2">1.10.3</td><td></td>
+      </tr>
+      <tr class="pt-sp-middle specSelect specSelect23909194064"><td colspan="3">Desc</td></tr>
+      <tr class="pt-sp-bottom specSelect specSelect23909194064">
+        <td><span>183.000</span> <span>point</span></td><td><span>@ 1192.56</span></td><td>₹218238.48</td>
+      </tr>
+    </table>
+  `;
+  const dprParsed = reBatch.parseApprovedDprSpecsHtml(dprHtml);
+  assert.equal(dprParsed.dprQtyBySpecId.get('23909194064'), 183);
+
+  // E. buildReHelperRowModel & renderInlineHelperHtml
+  const specItemsSample = [
+    { slNo: '1', headspecid: '23909194064', specCode: '1.10.3', qty: 366 },
+    { slNo: '4', headspecid: '23307194047', specCode: '1.11', qty: 8 },
+    { slNo: '5', headspecid: '23534194048', specCode: '90.3.10', qty: 66.6 },
+    { slNo: '58', headspecid: '23510194145', specCode: '90.16.1.6', qty: 312 },
+  ];
+  const helperModel = reBatch.buildReHelperRowModel(specItemsSample, {
+    hasDevSource: true,
+    hasMbookSource: true,
+    devBySpecId: devParsed.bySpecId,
+    devBySlAndCode: devParsed.bySlAndCode,
+    mbookTotalsBySpecId: mbTotalsParsed.totalsBySpecId,
+    mbookPendingBySpecId: mbPendParsed.pendingBySpecId,
+  });
+
+  const m1 = helperModel.bySpecId.get('23909194064');
+  assert.equal(m1.dprQty, 183);
+  assert.equal(m1.mbookAcceptedQty, 183);
+  assert.equal(m1.mbookPendingQty, 0);
+  assert.equal(m1.isDoubledTbe, true);
+  assert.equal(m1.isFullyExecutedInMbook, true);
+  assert.equal(m1.hasUnsyncedMbook, false);
+
+  const m4 = helperModel.bySpecId.get('23307194047');
+  assert.equal(m4.dprQty, 8);
+  assert.equal(m4.mbookAcceptedQty, 0);
+  assert.equal(m4.hasMbook, false);
+  assert.equal(m4.isDoubledTbe, false);
+
+  const m58 = helperModel.bySpecId.get('23510194145');
+  assert.equal(m58.dprQty, 250);
+  assert.equal(m58.mbookAcceptedQty, 62);
+  assert.equal(m58.mbookPendingQty, 89.4);
+  assert.equal(m58.mbookTotalQty, 151.4);
+  assert.equal(m58.hasPendingAe, true);
+  assert.equal(m58.hasUnsyncedMbook, false);
+  assert.match(reBatch.renderInlineHelperHtml(m58), /MBook: 62 \(\+89\.4 Pend = 151\.4\)/);
+  assert.match(reBatch.renderInlineHelperHtml(m1), /Doubled \(\+183\)/);
+
+  // F. Sequential fetchReHeadingHelperData + session restoration + pending AE activity cache
+  {
+    const fetchCalls = [];
+    const testCache = {
+      byHeadingKey: new Map(),
+      pendingAeByActivityId: new Map(),
+    };
+    const mockPostForm = async (ep, params) => {
+      fetchCalls.push({ ep, params });
+      if (ep === 're_deviation_statement.pro') return devHtml;
+      if (ep === 'embookAE_pending_head.pro') return mbHeadHtml;
+      if (ep === 'mbook_pending_ae.pro') return mbPendingHtml;
+      if (ep === 'revised_estimation.pro') return '<input type="hidden" id="estEditId" value="23021474307">';
+      if (ep === 'change_re_heading.pro') return '<div>ok</div>';
+      if (ep === 'call_to_be_executed.pro') return '<div>tbe</div>';
+      throw new Error('Unexpected endpoint: ' + ep);
+    };
+
+    const res1 = await reBatch.fetchReHeadingHelperData({
+      doc: multiActivityReDoc,
+      bridgeCtx: { curHeadId: '231119132', selTab: 'AM', selItem: '23909194064', headOrderNo: '1' },
+      postForm: mockPostForm,
+      cache: testCache,
+    });
+    assert.equal(res1.ok, true);
+    assert.equal(res1.fromCache, false);
+    assert.deepEqual(
+      fetchCalls.map((c) => c.ep),
+      [
+        're_deviation_statement.pro',
+        'embookAE_pending_head.pro',
+        'mbook_pending_ae.pro',
+        'revised_estimation.pro',
+        'change_re_heading.pro',
+        'call_to_be_executed.pro',
+      ]
+    );
+    assert.equal(fetchCalls[0].params.estid, '2685432619');
+    assert.equal(fetchCalls[1].params.activityid, '234144');
+    assert.equal(fetchCalls[1].params.headOrder, '1');
+
+    // Second call for same heading returns cache with 0 POSTs
+    fetchCalls.length = 0;
+    const resCached = await reBatch.fetchReHeadingHelperData({
+      doc: multiActivityReDoc,
+      bridgeCtx: { curHeadId: '231119132', selTab: 'AM', selItem: '23909194064', headOrderNo: '1' },
+      postForm: mockPostForm,
+      cache: testCache,
+    });
+    assert.equal(resCached.ok, true);
+    assert.equal(resCached.fromCache, true);
+    assert.equal(fetchCalls.length, 0);
+
+    // Switching to Heading 2 on same activity reuses cached mbook_pending_ae.pro
+    const resH2 = await reBatch.fetchReHeadingHelperData({
+      doc: multiActivityReDoc,
+      bridgeCtx: { curHeadId: '234569128', selTab: 'AH', selItem: '', headOrderNo: '2' },
+      contextOverride: { headId: '234569128', headOrderNo: '2', selTab: 'AH', selItem: '' },
+      postForm: mockPostForm,
+      cache: testCache,
+    });
+    assert.equal(resH2.ok, true);
+    assert.equal(
+      fetchCalls.some((c) => c.ep === 'mbook_pending_ae.pro'),
+      false
+    );
+    assert.deepEqual(
+      fetchCalls.map((c) => c.ep),
+      [
+        're_deviation_statement.pro',
+        'embookAE_pending_head.pro',
+        'revised_estimation.pro',
+        'change_re_heading.pro',
+      ]
+    );
+
+    // Measurement form open guard refuses to mutate session
+    const resBlocked = await reBatch.fetchReHeadingHelperData({
+      doc: multiActivityReDoc,
+      bridgeCtx: { curHeadId: '231119132', hasMeasurementFormOpen: true },
+      postForm: mockPostForm,
+      cache: testCache,
+    });
+    assert.equal(resBlocked.ok, false);
+    assert.equal(resBlocked.formOpen, true);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 14. RE Helper TBE Upsert (Add / In-Place Edit / Consolidate / Delete) Tests
+// ---------------------------------------------------------------------------
+{
+  // A. Quantity helpers & input validation
+  assert.equal(reBatch.roundQty3(12.3456), 12.346);
+  assert.equal(reBatch.roundQty3(-0), 0);
+  assert.equal(reBatch.formatEditableQty(183.0), '183');
+  assert.equal(reBatch.formatEditableQty(12.5), '12.5');
+  assert.equal(reBatch.formatEditableQty(0), '0');
+  assert.equal(reBatch.formatEditableQty(null), '');
+
+  assert.deepEqual(reBatch.parseEditableQtyInput(''), { kind: 'blank', value: null });
+  assert.deepEqual(reBatch.parseEditableQtyInput('  1,234.5678 '), { kind: 'valid', value: 1234.568 });
+  assert.deepEqual(reBatch.parseEditableQtyInput('0'), { kind: 'valid', value: 0 });
+  assert.equal(reBatch.parseEditableQtyInput('-5').kind, 'invalid');
+  assert.equal(reBatch.parseEditableQtyInput('abc').kind, 'invalid');
+  assert.equal(reBatch.parseEditableQtyInput('12.3.4').kind, 'invalid');
+
+  // B. Enhanced parseToBeExecutedHtml extracts tbeQty & heads
+  const existingTbeHtml = `
+    <div class="pt-measurement-table">
+      <table id="pt-measurement">
+        <tbody id="head_measure_tbody">
+          <tr class="pt-measure-item">
+            <td><input type="checkbox" class="measurementcheckboxes" name="measurementcheckbox" id="23734202447" value="23734202447"></td>
+            <td>1_47_1</td>
+            <td><a class="pt-dropdown-toggle d-block"> Head Alpha </a></td>
+            <td><span>65.000</span> <span>/metre</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <span id="measrementTotal">65.000</span>
+    </div>
+  `;
+  const parsedExisting = reBatch.parseToBeExecutedHtml(existingTbeHtml);
+  assert.equal(parsedExisting.kind, 'has_measurements');
+  assert.deepEqual(parsedExisting.measurementIds, ['23734202447']);
+  assert.equal(parsedExisting.tbeQty, 65);
+  assert.deepEqual(parsedExisting.heads, [{ id: '23734202447', headDesc: 'Head Alpha' }]);
+
+  const parsedEmptyTbe = reBatch.parseToBeExecutedHtml(
+    `<form id="estimation_measurement"><input name="itemHeadDesc" value=""><button onclick="save_re_to_be_executed('23269194046')">Save</button></form>`,
+    '23269194046'
+  );
+  assert.equal(parsedEmptyTbe.kind, 'empty');
+  assert.equal(parsedEmptyTbe.tbeQty, 0);
+  assert.deepEqual(parsedEmptyTbe.heads, []);
+
+  // C. parseSaveReTbeResponse & buildSingleRowTbeFormParams
+  const saveOk = reBatch.parseSaveReTbeResponse(
+    JSON.stringify({
+      token: 'tok2',
+      busstatus: 'T',
+      message: 'Saved Successfully',
+      specid: '23269194046',
+      curheadid: '231119132',
+      estheadspecid: '23269194046',
+      url: 'call_to_be_executed.pro',
+    })
+  );
+  assert.equal(saveOk.ok, true);
+  assert.equal(saveOk.followUpUrl, 'call_to_be_executed.pro');
+  assert.equal(saveOk.curheadid, '231119132');
+  assert.equal(reBatch.parseSaveReTbeResponse(JSON.stringify({ status: 'A' })).sessionExpired, true);
+  assert.equal(reBatch.parseSaveReTbeResponse(JSON.stringify({ busstatus: 'E', message: 'Invalid' })).ok, false);
+
+  assert.deepEqual(reBatch.buildSingleRowTbeFormParams(5, 'Head A'), {
+    itemHeadDesc: 'Head A',
+    'measureList[1].itemDesc': '',
+    'measureList[1].itemN': '5.000',
+    'measureList[1].itemLength': '',
+    'measureList[1].itemBreadth': '',
+    'measureList[1].itemDepth': '',
+    'measureList[1].itemCf': '',
+    'measureList[1].itemQty': '5.000',
+  });
+
+  // D. upsertItemTbeQty: 0 -> 5 (Add)
+  {
+    const calls = [];
+    const resAdd = await reBatch.upsertItemTbeQty(
+      { headspecid: '23269194046' },
+      5,
+      {
+        headId: '231119132',
+        postForm: async (ep, params) => {
+          calls.push({ ep, params });
+          if (ep === 'call_to_be_executed.pro' && calls.length === 1) {
+            return `<form id="estimation_measurement"><input name="itemHeadDesc"><button onclick="save_re_to_be_executed('23269194046')">Save</button></form>`;
+          }
+          if (ep === 'save_re_to_be_executed.pro') {
+            return JSON.stringify({
+              busstatus: 'T',
+              message: 'Saved',
+              specid: '23269194046',
+              curheadid: '231119132',
+              estheadspecid: '23269194046',
+              url: 'call_to_be_executed.pro',
+            });
+          }
+          if (ep === 'call_to_be_executed.pro') {
+            return `
+              <table id="pt-measurement"><tbody id="head_measure_tbody">
+                <tr class="pt-measure-item"><td><input type="checkbox" class="measurementcheckboxes" name="measurementcheckbox" value="88001"></td><td><a class="pt-dropdown-toggle">1</a></td></tr>
+              </tbody></table>
+              <span id="measrementTotal">5.000</span>
+            `;
+          }
+          throw new Error('Unexpected endpoint ' + ep);
+        },
+      }
+    );
+    assert.equal(resAdd.ok, true);
+    assert.equal(resAdd.status, 'added');
+    assert.equal(resAdd.tbeQty, 5);
+    assert.deepEqual(resAdd.measurementIds, ['88001']);
+    assert.deepEqual(
+      calls.map((c) => c.ep),
+      ['call_to_be_executed.pro', 'save_re_to_be_executed.pro', 'call_to_be_executed.pro']
+    );
+    assert.equal(calls[1].params['measureList[1].itemN'], '5.000');
+    assert.equal(calls[1].params['measureList[1].itemQty'], '5.000');
+    assert.equal(calls[1].params.headspecid, '23269194046');
+    assert.equal(calls[1].params.grandtotal, '5.000');
+  }
+
+  // E. upsertItemTbeQty: 5 -> 8 (In-Place Edit via revised_estimation_edit_measurement.pro + save_re_to_be_executed_edit.pro)
+  {
+    const calls = [];
+    const resEdit = await reBatch.upsertItemTbeQty(
+      { headspecid: '23269194046' },
+      8,
+      {
+        headId: '231119132',
+        postForm: async (ep, params) => {
+          calls.push({ ep, params });
+          if (ep === 'call_to_be_executed.pro' && calls.length === 1) {
+            return `
+              <table id="pt-measurement"><tbody id="head_measure_tbody">
+                <tr class="pt-measure-item"><td><input type="checkbox" class="measurementcheckboxes" name="measurementcheckbox" value="88001"></td><td><a class="pt-dropdown-toggle">Main Head</a></td></tr>
+              </tbody></table>
+              <span id="measrementTotal">5.000</span>
+            `;
+          }
+          if (ep === 'revised_estimation_edit_measurement.pro') {
+            return `<form id="estimation_measurement"><input name="itemHeadDesc" value="Main Head"><a onclick="save_re_to_be_executed_edit('88001')">Save</a></form>`;
+          }
+          if (ep === 'save_re_to_be_executed_edit.pro') {
+            return JSON.stringify({
+              busstatus: 'T',
+              message: 'Updated',
+              specid: '23269194046',
+              curheadid: '231119132',
+              estheadspecid: '23269194046',
+              url: 'call_to_be_executed.pro',
+            });
+          }
+          if (ep === 'call_to_be_executed.pro') {
+            return `
+              <table id="pt-measurement"><tbody id="head_measure_tbody">
+                <tr class="pt-measure-item"><td><input type="checkbox" class="measurementcheckboxes" name="measurementcheckbox" value="88001"></td><td><a class="pt-dropdown-toggle">Main Head</a></td></tr>
+              </tbody></table>
+              <span id="measrementTotal">8.000</span>
+            `;
+          }
+          throw new Error('Unexpected endpoint ' + ep);
+        },
+      }
+    );
+    assert.equal(resEdit.ok, true);
+    assert.equal(resEdit.status, 'edited');
+    assert.equal(resEdit.tbeQty, 8);
+    assert.deepEqual(
+      calls.map((c) => c.ep),
+      [
+        'call_to_be_executed.pro',
+        'revised_estimation_edit_measurement.pro',
+        'save_re_to_be_executed_edit.pro',
+        'call_to_be_executed.pro',
+      ]
+    );
+    assert.equal(calls[1].params.measureheadid, '88001');
+    assert.equal(calls[2].params.specmeasureheadid, '88001');
+    assert.equal(calls[2].params.headspecid, undefined);
+    assert.equal(calls[2].params.itemHeadDesc, 'Main Head');
+    assert.equal(calls[2].params['measureList[1].itemN'], '8.000');
+    assert.equal(calls[2].params.grandtotal, '8.000');
+  }
+
+  // F. upsertItemTbeQty: Multi-head consolidation (2 heads -> delete extra head, edit first)
+  {
+    const calls = [];
+    const multiHeadHtml = `
+      <table id="pt-measurement"><tbody id="head_measure_tbody">
+        <tr class="pt-measure-item"><td><input type="checkbox" class="measurementcheckboxes" name="measurementcheckbox" value="101"></td><td><a class="pt-dropdown-toggle">H1</a></td></tr>
+        <tr class="pt-measure-item"><td><input type="checkbox" class="measurementcheckboxes" name="measurementcheckbox" value="102"></td><td><a class="pt-dropdown-toggle">H2</a></td></tr>
+      </tbody></table>
+      <span id="measrementTotal">12.000</span>
+    `;
+    const resMulti = await reBatch.upsertItemTbeQty(
+      { headspecid: '2303845233345' },
+      3,
+      {
+        headId: '231119132',
+        postForm: async (ep, params) => {
+          calls.push({ ep, params });
+          if (ep === 'call_to_be_executed.pro' && calls.length === 1) return multiHeadHtml;
+          if (ep === 'delete_re_to_be_executed.pro') {
+            return JSON.stringify({ busstatus: 'T', headid: '231119132', estheadspecid: '2303845233345' });
+          }
+          if (ep === 'call_to_be_executed.pro' && calls.length === 3) {
+            return `<table id="pt-measurement"><tbody id="head_measure_tbody"><tr class="pt-measure-item"><td><input type="checkbox" class="measurementcheckboxes" name="measurementcheckbox" value="101"></td><td><a class="pt-dropdown-toggle">H1</a></td></tr></tbody></table><span id="measrementTotal">6.000</span>`;
+          }
+          if (ep === 'revised_estimation_edit_measurement.pro') {
+            return `<form id="estimation_measurement"><a onclick="save_re_to_be_executed_edit('101')">Save</a></form>`;
+          }
+          if (ep === 'save_re_to_be_executed_edit.pro') {
+            return JSON.stringify({ busstatus: 'T', specid: '2303845233345', curheadid: '231119132', estheadspecid: '2303845233345', url: 'call_to_be_executed.pro' });
+          }
+          if (ep === 'call_to_be_executed.pro') {
+            return `<table id="pt-measurement"><tbody id="head_measure_tbody"><tr class="pt-measure-item"><td><input type="checkbox" class="measurementcheckboxes" name="measurementcheckbox" value="101"></td><td><a class="pt-dropdown-toggle">H1</a></td></tr></tbody></table><span id="measrementTotal">3.000</span>`;
+          }
+          throw new Error('Unexpected ' + ep);
+        },
+      }
+    );
+    assert.equal(resMulti.ok, true);
+    assert.equal(resMulti.status, 'edited');
+    assert.equal(resMulti.tbeQty, 3);
+    assert.deepEqual(resMulti.measurementIds, ['101']);
+    assert.equal(calls[1].ep, 'delete_re_to_be_executed.pro');
+    assert.equal(calls[1].params.colList, '102');
+  }
+
+  // G. upsertItemTbeQty: X -> 0 (Delete), 0 -> 0 (Unchanged), X -> X (Unchanged), sessionExpired & server error
+  {
+    const delCalls = [];
+    const resDel = await reBatch.upsertItemTbeQty({ headspecid: '23269194046' }, 0, {
+      postForm: async (ep, params) => {
+        delCalls.push({ ep, params });
+        if (ep === 'call_to_be_executed.pro') return existingTbeHtml;
+        if (ep === 'delete_re_to_be_executed.pro') {
+          return JSON.stringify({ busstatus: 'T', message: 'Deleted', headid: '231119132', estheadspecid: '23269194046' });
+        }
+        throw new Error('Unexpected ' + ep);
+      },
+    });
+    assert.equal(resDel.ok, true);
+    assert.equal(resDel.status, 'deleted');
+    assert.equal(resDel.tbeQty, 0);
+    assert.equal(delCalls[1].params.colList, '23734202447');
+
+    // 0 -> 0 no-op
+    let emptyCalls = 0;
+    const resZeroNoop = await reBatch.upsertItemTbeQty({ headspecid: '23269194046' }, 0, {
+      postForm: async () => {
+        emptyCalls++;
+        return `<form id="estimation_measurement"><input name="itemHeadDesc"></form>`;
+      },
+    });
+    assert.equal(resZeroNoop.ok, true);
+    assert.equal(resZeroNoop.status, 'unchanged');
+    assert.equal(emptyCalls, 1);
+
+    // 65 -> 65 no-op
+    let sameCalls = 0;
+    const resSameNoop = await reBatch.upsertItemTbeQty({ headspecid: '23269194046' }, 65, {
+      postForm: async () => {
+        sameCalls++;
+        return existingTbeHtml;
+      },
+    });
+    assert.equal(resSameNoop.ok, true);
+    assert.equal(resSameNoop.status, 'unchanged');
+    assert.equal(sameCalls, 1);
+
+    // Session expired
+    const resSess = await reBatch.upsertItemTbeQty({ headspecid: '23269194046' }, 4, {
+      postForm: async () => {
+        throw new Error('SESSION_EXPIRED');
+      },
+    });
+    assert.equal(resSess.ok, false);
+    assert.equal(resSess.sessionExpired, true);
+
+    // Server error on save
+    const resErr = await reBatch.upsertItemTbeQty({ headspecid: '23269194046' }, 4, {
+      postForm: async (ep) => {
+        if (ep === 'call_to_be_executed.pro') {
+          return `<form id="estimation_measurement"><input name="itemHeadDesc"></form>`;
+        }
+        return JSON.stringify({ busstatus: 'E', message: 'Validation failed' });
+      },
+    });
+    assert.equal(resErr.ok, false);
+    assert.match(resErr.error, /Validation failed/);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 15. RE Helper Deviation %, Compact OD Spec & Official Page Hide/Show Tests
+// ---------------------------------------------------------------------------
+{
+  // A. Compact OD Spec formatter
+  assert.equal(reBatch.formatCompactSpecCode('OD254840/2022-2023'), 'OD254840');
+  assert.equal(reBatch.formatCompactSpecCode('od 167631 / 2025-2026'), 'OD167631');
+  assert.equal(reBatch.formatCompactSpecCode('OD170997/2025'), 'OD170997');
+  assert.equal(reBatch.formatCompactSpecCode('1.10.3'), '1.10.3');
+  assert.equal(reBatch.formatCompactSpecCode('90.16.1.6'), '90.16.1.6');
+  assert.equal(reBatch.formatCompactSpecCode(''), '-');
+
+  // B. Quantity deviation % calculator
+  assert.deepEqual(reBatch.computeQtyDeviation(183, 183), {
+    devPct: 0,
+    deltaQty: 0,
+    kind: 'zero',
+    label: '0%',
+  });
+  assert.deepEqual(reBatch.computeQtyDeviation(50, 12), {
+    devPct: -76,
+    deltaQty: -38,
+    kind: 'neg',
+    label: '-76.0%',
+  });
+  assert.deepEqual(reBatch.computeQtyDeviation(61, 66.6), {
+    devPct: 9.18,
+    deltaQty: 5.6,
+    kind: 'pos',
+    label: '+9.2%',
+  });
+  assert.deepEqual(reBatch.computeQtyDeviation(43, 81), {
+    devPct: 88.37,
+    deltaQty: 38,
+    kind: 'high',
+    label: '+88.4%',
+  });
+  assert.deepEqual(reBatch.computeQtyDeviation(0, 10), {
+    devPct: null,
+    deltaQty: 10,
+    kind: 'extra',
+    label: 'Extra',
+  });
+  assert.deepEqual(reBatch.computeQtyDeviation(0, 0), {
+    devPct: 0,
+    deltaQty: 0,
+    kind: 'zero',
+    label: '0%',
+  });
+  assert.deepEqual(reBatch.computeQtyDeviation(null, 10), {
+    devPct: null,
+    deltaQty: null,
+    kind: 'unknown',
+    label: '—',
+  });
+
+  // C. buildReHelperRowModel populates deviation & dprBalanceQty
+  const devRowsMap = new Map([
+    ['s1', { dprQty: 50, reExecutedQty: 12, reTbeQty: 0, reTotalQty: 12, origAmount: 50000 }],
+    ['s2', { dprQty: 43, reExecutedQty: 38, reTbeQty: 43, reTotalQty: 81, origAmount: 43000 }],
+    ['s3', { dprQty: 10, reExecutedQty: 15, reTbeQty: 0, reTotalQty: 15, origAmount: 10000 }],
+  ]);
+  const built = reBatch.buildReHelperRowModel(
+    [
+      { slNo: '1', headspecid: 's1', specCode: '1.10.1', qty: 12 },
+      { slNo: '2', headspecid: 's2', specCode: 'OD254840/2022-2023', qty: 81 },
+      { slNo: '3', headspecid: 's3', specCode: '1.11', qty: 15 },
+    ],
+    { hasDevSource: true, devBySpecId: devRowsMap }
+  );
+  assert.equal(built.bySpecId.get('s1').dprBalanceQty, 38);
+  assert.equal(built.bySpecId.get('s1').deviation.label, '-76.0%');
+  assert.equal(built.bySpecId.get('s2').dprBalanceQty, 5);
+  assert.equal(built.bySpecId.get('s2').deviation.kind, 'high');
+  assert.equal(built.bySpecId.get('s2').deviation.label, '+88.4%');
+  assert.equal(built.bySpecId.get('s3').dprBalanceQty, 0);
+  assert.equal(built.bySpecId.get('s3').deviation.label, '+50.0%');
+
+  // D. clearInlineReHelpers removes injected helper chips while preserving native .pt-wz containers
+  const helperPageDoc = parseMiniHtml(`
+    <table id="pt-specifications">
+      <tbody>
+        <tr class="pt-sp-middle">
+          <td colspan="3">
+            <p class="sp-content">Item 1</p>
+            <div class="pt-wz">
+              <div class="p3h-re-item-helper"><span class="p3h-re-qchip">DPR: 50</span></div>
+            </div>
+          </td>
+        </tr>
+        <tr class="pt-sp-middle">
+          <td colspan="3">
+            <p class="sp-content">Item 2</p>
+            <div class="pt-wz">
+              <div class="p3h-re-item-helper"><span class="p3h-re-qchip">DPR: 15</span></div>
+            </div>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  `);
+  assert.equal(reBatch.clearInlineReHelpers(helperPageDoc), 2);
+  assert.equal(helperPageDoc.querySelectorAll('.p3h-re-item-helper').length, 0);
+  assert.equal(helperPageDoc.querySelectorAll('.pt-wz').length, 2);
+}
+
+// ---------------------------------------------------------------------------
+// 16. RE Helper Detailed TBE Split-Ups (Sub-Headings, L/B/H/Cf & CRUD) Tests
+// ---------------------------------------------------------------------------
+{
+  // A. Verbatim portal HTML parsing for single-head split-up with formula & multiple rows
+  const verbatimSingleHeadHtml = `
+    <div class="container-fluid h-100 pt-0 ps-0 pe-0 pt-pb-40 pt-measurement-table position-relative">
+      <div class="pt-measure-overlay align-middle " id="pt-measure-overlay1">
+        <div class="pt-meature-pop h-100"><div class="pt-dropdown h-100"><div class="table-responsive h-100">
+          <table class="table pt-table table-bordered" id="measureTable">
+            <tbody id="measure23648202409">
+              <tr id="measurement23648202409" class="est_from_list">
+                <td></td><td colspan="2">4_130_1</td><td colspan="7">      Excavation</td>
+              </tr>
+              <tr>
+                <td>1</td>
+                <td colspan="2">DG plinth <input type="hidden" id="itemDesc23648202409-1" name="itemDesc" class="mb_textbox" value="DG plinth"></td>
+                <td>2.600 <input type="hidden" id="itemN23648202409-1" name="itemN" class="mb_textbox" value="2.600"></td>
+                <td><input type="hidden" id="itemLength23648202409-1" name="itemLength" class="mb_textbox" value=""></td>
+                <td><input type="hidden" id="itemBreadth23648202409-1" name="itemBreadth" class="mb_textbox" value=""></td>
+                <td><input type="hidden" id="itemDepth23648202409-1" name="itemDepth" class="mb_textbox" value=""></td>
+                <td><input type="hidden" id="itemCf23648202409-1" name="itemCf" class="mb_textbox" value=""></td>
+                <td>2.600 <input type="hidden" id="itemQty23648202409-1" name="itemQty" class="mb_textbox" value="2.600"></td>
+                <td>cum</td>
+              </tr>
+              <tr><td colspan="10"></td></tr>
+              <tr class="bg-grey">
+                <td>2</td>
+                <td colspan="2">lamp post <input type="hidden" id="itemDesc23648202409-2" name="itemDesc" class="mb_textbox" value="lamp post"></td>
+                <td>2*0.422 <input type="hidden" id="itemN23648202409-2" name="itemN" class="mb_textbox" value="2*0.422"></td>
+                <td><input type="hidden" id="itemLength23648202409-2" name="itemLength" class="mb_textbox" value=""></td>
+                <td><input type="hidden" id="itemBreadth23648202409-2" name="itemBreadth" class="mb_textbox" value=""></td>
+                <td><input type="hidden" id="itemDepth23648202409-2" name="itemDepth" class="mb_textbox" value=""></td>
+                <td><input type="hidden" id="itemCf23648202409-2" name="itemCf" class="mb_textbox" value=""></td>
+                <td>0.844 <input type="hidden" id="itemQty23648202409-2" name="itemQty" class="mb_textbox" value="0.844"></td>
+                <td>cum</td>
+              </tr>
+              <tr><td colspan="10"></td></tr>
+            </tbody>
+          </table>
+        </div></div></div>
+      </div>
+      <table class="table table-bordered pt-table" id="pt-measurement">
+        <tbody id="head_measure_tbody">
+          <tr class="pt-measure-item pointer">
+            <td><input type="checkbox" class="measurementcheckboxes" name="measurementcheckbox" id="23648202409" value="23648202409"></td>
+            <td onclick="callInnerMeasurements('pt-measure-overlay1','3.444')">4_130_1</td>
+            <td onclick="callInnerMeasurements('pt-measure-overlay1','3.444')"><a class="pt-dropdown-toggle d-block">      Excavation</a></td>
+            <td onclick="callInnerMeasurements('pt-measure-overlay1','3.444')"><span>3.444</span> <span>/cum</span></td>
+            <td><a class="pt-popaddMeasureForm" onclick="call_to_be_executed_between('23879194042','1')">+</a></td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="final-amount"><span id="measrementTotal">3.444</span></div>
+    </div>
+  `;
+  const parsedVerbatim = reBatch.parseToBeExecutedHtml(verbatimSingleHeadHtml, '23879194042');
+  assert.equal(parsedVerbatim.kind, 'has_measurements');
+  assert.equal(parsedVerbatim.tbeQty, 3.444);
+  assert.deepEqual(parsedVerbatim.heads, [{ id: '23648202409', headDesc: 'Excavation' }]);
+  assert.equal(parsedVerbatim.headDetails.length, 1);
+  assert.equal(parsedVerbatim.headDetails[0].mgn, '4_130_1');
+  assert.equal(parsedVerbatim.headDetails[0].headQty, 3.444);
+  assert.equal(parsedVerbatim.headDetails[0].unit, 'cum');
+  assert.equal(parsedVerbatim.headDetails[0].itemHeadOrder, '1');
+  assert.equal(parsedVerbatim.headDetails[0].overlayId, 'pt-measure-overlay1');
+  assert.deepEqual(parsedVerbatim.headDetails[0].rows, [
+    {
+      rowIndex: 1,
+      itemDesc: 'DG plinth',
+      itemN: '2.600',
+      itemLength: '',
+      itemBreadth: '',
+      itemDepth: '',
+      itemCf: '',
+      itemQty: 2.6,
+      unit: 'cum',
+    },
+    {
+      rowIndex: 2,
+      itemDesc: 'lamp post',
+      itemN: '2*0.422',
+      itemLength: '',
+      itemBreadth: '',
+      itemDepth: '',
+      itemCf: '',
+      itemQty: 0.844,
+      unit: 'cum',
+    },
+  ]);
+  assert.equal(reBatch.hasDetailedSplitUp(parsedVerbatim), true);
+
+  // B. Multi-head HTML with L/B/H/Cf and negative deduction row
+  const multiHeadSplitHtml = `
+    <div class="pt-measurement-table">
+      <div class="pt-measure-overlay" id="pt-measure-overlay1">
+        <table id="measureTable"><tbody id="measure7001">
+          <tr id="measurement7001" class="est_from_list"><td></td><td colspan="2">4_131_1</td><td colspan="7">Footing</td></tr>
+          <tr>
+            <td>1</td>
+            <td colspan="2">F1 <input type="hidden" name="itemDesc" value="F1"></td>
+            <td><input type="hidden" name="itemN" value="2"></td>
+            <td><input type="hidden" name="itemLength" value="1.500"></td>
+            <td><input type="hidden" name="itemBreadth" value="1.200"></td>
+            <td><input type="hidden" name="itemDepth" value="0.600"></td>
+            <td><input type="hidden" name="itemCf" value=""></td>
+            <td><input type="hidden" name="itemQty" value="2.160"></td>
+            <td>cum</td>
+          </tr>
+        </tbody></table>
+      </div>
+      <div class="pt-measure-overlay" id="pt-measure-overlay2">
+        <table id="measureTable"><tbody id="measure7002">
+          <tr id="measurement7002" class="est_from_list"><td></td><td colspan="2">4_131_2</td><td colspan="7">Deductions</td></tr>
+          <tr>
+            <td>1</td>
+            <td colspan="2">Void <input type="hidden" name="itemDesc" value="Void"></td>
+            <td><input type="hidden" name="itemN" value="-1"></td>
+            <td><input type="hidden" name="itemLength" value="0.500"></td>
+            <td><input type="hidden" name="itemBreadth" value="0.400"></td>
+            <td><input type="hidden" name="itemDepth" value="0.500"></td>
+            <td><input type="hidden" name="itemCf" value="0.800000"></td>
+            <td><input type="hidden" name="itemQty" value="-0.080"></td>
+            <td>cum</td>
+          </tr>
+        </tbody></table>
+      </div>
+      <table id="pt-measurement"><tbody id="head_measure_tbody">
+        <tr class="pt-measure-item">
+          <td><input type="checkbox" class="measurementcheckboxes" name="measurementcheckbox" value="7001"></td>
+          <td onclick="callInnerMeasurements('pt-measure-overlay1','2.160')">4_131_1</td>
+          <td><a class="pt-dropdown-toggle">Footing</a></td>
+          <td><span>2.160</span> <span>/cum</span></td>
+          <td><a class="pt-popaddMeasureForm" onclick="call_to_be_executed_between('99001','1')">+</a></td>
+        </tr>
+        <tr class="pt-measure-item">
+          <td><input type="checkbox" class="measurementcheckboxes" name="measurementcheckbox" value="7002"></td>
+          <td onclick="callInnerMeasurements('pt-measure-overlay2','-0.080')">4_131_2</td>
+          <td><a class="pt-dropdown-toggle">Deductions</a></td>
+          <td><span>-0.080</span> <span>/cum</span></td>
+          <td><a class="pt-popaddMeasureForm" onclick="call_to_be_executed_between('99001','2')">+</a></td>
+        </tr>
+      </tbody></table>
+      <span id="measrementTotal">2.080</span>
+    </div>
+  `;
+  const parsedMultiSplit = reBatch.parseToBeExecutedHtml(multiHeadSplitHtml, '99001');
+  assert.equal(parsedMultiSplit.tbeQty, 2.08);
+  assert.equal(parsedMultiSplit.headDetails.length, 2);
+  assert.equal(parsedMultiSplit.headDetails[0].rows[0].itemLength, '1.500');
+  assert.equal(parsedMultiSplit.headDetails[1].itemHeadOrder, '2');
+  assert.equal(parsedMultiSplit.headDetails[1].rows[0].itemCf, '0.800000');
+  assert.equal(parsedMultiSplit.headDetails[1].rows[0].itemQty, -0.08);
+  assert.equal(reBatch.hasDetailedSplitUp(parsedMultiSplit), true);
+
+  // C. CSP-safe formula evaluator, row qty calculator & hasDetailedSplitUp edge cases
+  assert.deepEqual(reBatch.evalMeasurementExpr('2*0.422'), { ok: true, value: 0.844, isFormula: true });
+  assert.deepEqual(reBatch.evalMeasurementExpr('(3.2 + 1.8) / 2'), { ok: true, value: 2.5, isFormula: true });
+  assert.deepEqual(reBatch.evalMeasurementExpr('-2*0.5'), { ok: true, value: -1, isFormula: true });
+  assert.deepEqual(reBatch.evalMeasurementExpr('-(1.2+0.3)'), { ok: true, value: -1.5, isFormula: true });
+  assert.deepEqual(reBatch.evalMeasurementExpr('4.5'), { ok: true, value: 4.5, isFormula: false });
+  assert.equal(reBatch.evalMeasurementExpr('2*+').ok, false);
+  assert.equal(reBatch.evalMeasurementExpr('1/0').ok, false);
+  assert.equal(reBatch.evalMeasurementExpr('abc').ok, false);
+  assert.equal(reBatch.evalMeasurementExpr('(1+2').ok, false);
+  assert.equal(reBatch.evalMeasurementExpr('1.2.3').ok, false);
+
+  assert.deepEqual(
+    reBatch.computeMeasurementRowQty({
+      itemDesc: '',
+      itemN: '',
+      itemLength: '',
+      itemBreadth: '',
+      itemDepth: '',
+      itemCf: '',
+    }),
+    { kind: 'blank', qty: null }
+  );
+  const calcLbh = reBatch.computeMeasurementRowQty({
+    itemDesc: 'Wall',
+    itemN: '2',
+    itemLength: '3.5',
+    itemBreadth: '0.23',
+    itemDepth: '1.8',
+    itemCf: '',
+  });
+  assert.equal(calcLbh.kind, 'valid');
+  assert.equal(calcLbh.qty, 2.898);
+  assert.equal(calcLbh.isDeduction, false);
+
+  const calcDed = reBatch.computeMeasurementRowQty({
+    itemDesc: 'Door deduction',
+    itemN: '-2',
+    itemLength: '1.2',
+    itemBreadth: '0.23',
+    itemDepth: '2.1',
+    itemCf: '1',
+  });
+  assert.equal(calcDed.kind, 'valid');
+  assert.equal(calcDed.qty, -1.159);
+  assert.equal(calcDed.isDeduction, true);
+
+  assert.equal(
+    reBatch.computeMeasurementRowQty({ itemN: '2', itemLength: '-1' }).kind,
+    'invalid'
+  );
+  assert.equal(
+    reBatch.computeMeasurementRowQty({ itemN: '2', itemCf: '1/2' }).kind,
+    'invalid'
+  );
+  assert.equal(
+    reBatch.computeMeasurementRowQty({ itemN: '2', itemCf: '0.1234567' }).kind,
+    'invalid'
+  );
+
+  // Simple single plain-number row is NOT considered detailed split-up
+  assert.equal(
+    reBatch.hasDetailedSplitUp({
+      kind: 'has_measurements',
+      count: 1,
+      headDetails: [
+        {
+          id: '1',
+          rows: [{ itemDesc: '', itemN: '5.000', itemLength: '', itemBreadth: '', itemDepth: '', itemCf: '' }],
+        },
+      ],
+    }),
+    false
+  );
+  // Adding L/B/H or Desc or formula makes it detailed
+  assert.equal(
+    reBatch.hasDetailedSplitUp({
+      kind: 'has_measurements',
+      count: 1,
+      headDetails: [
+        {
+          id: '1',
+          rows: [{ itemDesc: 'Plinth', itemN: '5.000', itemLength: '', itemBreadth: '', itemDepth: '', itemCf: '' }],
+        },
+      ],
+    }),
+    true
+  );
+
+  // D. Multi-row 1-indexed payload builder
+  const builtParams = reBatch.buildMeasurementHeadFormParams({
+    headDesc: '  Excavation  ',
+    rows: [
+      { itemDesc: 'DG plinth', itemN: '2.6', itemLength: '1.5', itemBreadth: '2', itemDepth: '', itemCf: '0.5' },
+      { itemDesc: 'lamp post', itemN: '2*0.422', itemLength: '', itemBreadth: '', itemDepth: '', itemCf: '' },
+      { itemDesc: '', itemN: '', itemLength: '', itemBreadth: '', itemDepth: '', itemCf: '' },
+    ],
+  });
+  assert.equal(builtParams.ok, true);
+  assert.equal(builtParams.rowCount, 2);
+  assert.equal(builtParams.headTotal, 4.744);
+  assert.equal(builtParams.grandtotal, '4.744');
+  assert.deepEqual(builtParams.params, {
+    itemHeadDesc: 'Excavation',
+    'measureList[1].itemDesc': 'DG plinth',
+    'measureList[1].itemN': '2.600',
+    'measureList[1].itemLength': '1.500',
+    'measureList[1].itemBreadth': '2.000',
+    'measureList[1].itemDepth': '',
+    'measureList[1].itemCf': '0.500000',
+    'measureList[1].itemQty': '3.900',
+    'measureList[2].itemDesc': 'lamp post',
+    'measureList[2].itemN': '2*0.422',
+    'measureList[2].itemLength': '',
+    'measureList[2].itemBreadth': '',
+    'measureList[2].itemDepth': '',
+    'measureList[2].itemCf': '',
+    'measureList[2].itemQty': '0.844',
+  });
+
+  // E. saveItemTbeHead across add_first, add_between, and edit (following .do recalculation URLs)
+  {
+    const calls = [];
+    const resAddFirst = await reBatch.saveItemTbeHead(
+      {
+        headspecid: '23879194042',
+        mode: 'add_first',
+        headDesc: 'Excavation',
+        rows: [
+          { itemDesc: 'DG plinth', itemN: '2.6', itemLength: '', itemBreadth: '', itemDepth: '', itemCf: '' },
+          { itemDesc: 'lamp post', itemN: '2*0.422', itemLength: '', itemBreadth: '', itemDepth: '', itemCf: '' },
+        ],
+      },
+      {
+        headId: '234729131',
+        postForm: async (ep, params) => {
+          calls.push({ ep, params });
+          if (ep === 'call_to_be_executed.pro') return `<form id="estimation_measurement"><input name="itemHeadDesc"></form>`;
+          if (ep === 'save_re_to_be_executed.pro') {
+            return JSON.stringify({
+              busstatus: 'T',
+              message: 'Successfully saved measurements',
+              specid: '23648202409',
+              curheadid: '234729131',
+              estheadspecid: '23879194042',
+              url: 'revised_estimation_to_be_executed_head.do',
+            });
+          }
+          if (ep === 'revised_estimation_to_be_executed_head.do') {
+            return verbatimSingleHeadHtml;
+          }
+          throw new Error('Unexpected ' + ep);
+        },
+      }
+    );
+    assert.equal(resAddFirst.ok, true);
+    assert.equal(resAddFirst.status, 'added');
+    assert.equal(resAddFirst.tbeQty, 3.444);
+    assert.equal(resAddFirst.hasDetailed, true);
+    assert.equal(resAddFirst.headDetails[0].rows.length, 2);
+    assert.deepEqual(
+      calls.map((c) => c.ep),
+      ['call_to_be_executed.pro', 'save_re_to_be_executed.pro', 'revised_estimation_to_be_executed_head.do']
+    );
+    assert.equal(calls[2].params.specid, '23648202409');
+    assert.equal(calls[2].params.curheadid, '234729131');
+  }
+
+  {
+    const calls = [];
+    const resBetween = await reBatch.saveItemTbeHead(
+      {
+        headspecid: '99001',
+        mode: 'add_between',
+        itemheadorder: '1',
+        headDesc: 'Deductions',
+        rows: [
+          { itemDesc: 'Void', itemN: '-1', itemLength: '0.5', itemBreadth: '0.4', itemDepth: '0.5', itemCf: '0.8' },
+        ],
+      },
+      {
+        headId: '234729131',
+        postForm: async (ep, params) => {
+          calls.push({ ep, params });
+          if (ep === 'call_to_be_executed_between.pro') return `<form id="estimation_measurement"><input name="itemHeadDesc"></form>`;
+          if (ep === 'call_to_be_executed_between_save.pro') {
+            return JSON.stringify({
+              busstatus: 'T',
+              specid: '7002',
+              curheadid: '234729131',
+              estheadspecid: '99001',
+              url: 'revised_estimation_to_be_executed_head.do',
+            });
+          }
+          if (ep === 'revised_estimation_to_be_executed_head.do') return multiHeadSplitHtml;
+          throw new Error('Unexpected ' + ep);
+        },
+      }
+    );
+    assert.equal(resBetween.ok, true);
+    assert.equal(resBetween.tbeQty, 2.08);
+    assert.equal(resBetween.headDetails.length, 2);
+    assert.deepEqual(
+      calls.map((c) => c.ep),
+      ['call_to_be_executed_between.pro', 'call_to_be_executed_between_save.pro', 'revised_estimation_to_be_executed_head.do']
+    );
+    assert.equal(calls[1].params.itemheadorder, '1');
+    assert.equal(calls[1].params.grandtotal, '-0.080');
+  }
+
+  {
+    const calls = [];
+    const resEditHead = await reBatch.saveItemTbeHead(
+      {
+        headspecid: '23879194042',
+        mode: 'edit',
+        measureheadid: '23648202409',
+        headDesc: 'Excavation',
+        rows: [
+          { itemDesc: 'DG plinth', itemN: '2.6', itemLength: '', itemBreadth: '', itemDepth: '', itemCf: '' },
+          { itemDesc: 'lamp post', itemN: '2*0.422', itemLength: '', itemBreadth: '', itemDepth: '', itemCf: '' },
+        ],
+      },
+      {
+        headId: '234729131',
+        postForm: async (ep, params) => {
+          calls.push({ ep, params });
+          if (ep === 'revised_estimation_edit_measurement.pro') {
+            return `<form id="estimation_measurement"><a onclick="save_re_to_be_executed_edit('23648202409')">Save</a></form>`;
+          }
+          if (ep === 'save_re_to_be_executed_edit.pro') {
+            return JSON.stringify({
+              busstatus: 'T',
+              specid: '23648202409',
+              curheadid: '234729131',
+              estheadspecid: '23879194042',
+              url: 'revised_estimation_to_be_executed_head.do',
+            });
+          }
+          if (ep === 'revised_estimation_to_be_executed_head.do') return verbatimSingleHeadHtml;
+          throw new Error('Unexpected ' + ep);
+        },
+      }
+    );
+    assert.equal(resEditHead.ok, true);
+    assert.equal(resEditHead.status, 'edited');
+    assert.deepEqual(
+      calls.map((c) => c.ep),
+      ['revised_estimation_edit_measurement.pro', 'save_re_to_be_executed_edit.pro', 'revised_estimation_to_be_executed_head.do']
+    );
+    assert.equal(calls[1].params.specmeasureheadid, '23648202409');
+    assert.equal(calls[1].params['measureList[2].itemN'], '2*0.422');
+  }
+
+  // F. deleteItemTbeHead follows est_total_recalc_after_to_be_executed_del.do
+  {
+    const calls = [];
+    const resDelHead = await reBatch.deleteItemTbeHead('23879194042', '23648202409', {
+      headId: '234729131',
+      postForm: async (ep, params) => {
+        calls.push({ ep, params });
+        if (ep === 'delete_re_to_be_executed.pro') {
+          return JSON.stringify({
+            busstatus: 'T',
+            message: 'Successfully deleted',
+            estheadspecid: '23879194042',
+            headid: '234729131',
+            url: 'est_total_recalc_after_to_be_executed_del.do',
+          });
+        }
+        if (ep === 'est_total_recalc_after_to_be_executed_del.do') {
+          return `<form id="estimation_measurement"><input name="itemHeadDesc"><button onclick="save_re_to_be_executed('23879194042')">Save</button></form>`;
+        }
+        throw new Error('Unexpected ' + ep);
+      },
+    });
+    assert.equal(resDelHead.ok, true);
+    assert.equal(resDelHead.kind, 'empty');
+    assert.equal(resDelHead.tbeQty, 0);
+    assert.equal(resDelHead.hasDetailed, false);
+    assert.deepEqual(
+      calls.map((c) => c.ep),
+      ['delete_re_to_be_executed.pro', 'est_total_recalc_after_to_be_executed_del.do']
+    );
+    assert.equal(calls[0].params.colList, '23648202409');
+    assert.equal(calls[1].params.specid, '23879194042');
+  }
+
+  // G. upsertItemTbeQty with preserveDetailedSplitUps blocks overwrite (0 write POSTs) & follows .do URLs
+  {
+    const calls = [];
+    const blocked = await reBatch.upsertItemTbeQty({ headspecid: '23879194042' }, 5, {
+      preserveDetailedSplitUps: true,
+      postForm: async (ep) => {
+        calls.push(ep);
+        if (ep === 'call_to_be_executed.pro') return verbatimSingleHeadHtml;
+        throw new Error('Should not perform write POST: ' + ep);
+      },
+    });
+    assert.equal(blocked.ok, false);
+    assert.equal(blocked.blockedBySplitUp, true);
+    assert.equal(blocked.tbeQty, 3.444);
+    assert.deepEqual(calls, ['call_to_be_executed.pro']);
+
+    // .do follow-up regression on normal upsertItemTbeQty
+    const doCalls = [];
+    const resDoFollow = await reBatch.upsertItemTbeQty({ headspecid: '23879194042' }, 10, {
+      headId: '234729131',
+      postForm: async (ep) => {
+        doCalls.push(ep);
+        if (ep === 'call_to_be_executed.pro') return `<form id="estimation_measurement"><input name="itemHeadDesc"></form>`;
+        if (ep === 'save_re_to_be_executed.pro') {
+          return JSON.stringify({
+            busstatus: 'T',
+            specid: '777',
+            curheadid: '234729131',
+            estheadspecid: '23879194042',
+            url: 'revised_estimation_to_be_executed_head.do',
+          });
+        }
+        if (ep === 'revised_estimation_to_be_executed_head.do') {
+          return `
+            <div class="pt-measure-overlay" id="pt-measure-overlay1"><table id="measureTable"><tbody id="measure777">
+              <tr><td>1</td><td colspan="2"><input type="hidden" name="itemDesc" value=""></td><td><input type="hidden" name="itemN" value="10.000"></td><td><input type="hidden" name="itemQty" value="10.000"></td><td>cum</td></tr>
+            </tbody></table></div>
+            <table id="pt-measurement"><tbody id="head_measure_tbody">
+              <tr class="pt-measure-item"><td><input type="checkbox" class="measurementcheckboxes" name="measurementcheckbox" value="777"></td><td>1_1_1</td><td><a class="pt-dropdown-toggle">1</a></td><td><span>10.000</span> <span>/cum</span></td></tr>
+            </tbody></table>
+            <span id="measrementTotal">10.000</span>
+          `;
+        }
+        throw new Error('Unexpected ' + ep);
+      },
+    });
+    assert.equal(resDoFollow.ok, true);
+    assert.equal(resDoFollow.tbeQty, 10);
+    assert.equal(resDoFollow.hasDetailed, false);
+    assert.deepEqual(doCalls, [
+      'call_to_be_executed.pro',
+      'save_re_to_be_executed.pro',
+      'revised_estimation_to_be_executed_head.do',
+    ]);
+  }
+
+  // H. Static CSP guard: re-batch.js must never use eval() or new Function()
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const { fileURLToPath } = require('node:url');
+  const extDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const reBatchFinalSrc = fs.readFileSync(path.join(extDir, 're-batch.js'), 'utf8');
+  assert.equal(/\beval\s*\(/.test(reBatchFinalSrc), false);
+  assert.equal(/new\s+Function\s*\(/.test(reBatchFinalSrc), false);
 }
 
 console.log('ALL_P3H_V2_UNIT_TESTS_PASSED');

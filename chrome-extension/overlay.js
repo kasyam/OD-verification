@@ -2967,7 +2967,10 @@
               target.closest('#p3h-register-modal') ||
               target.closest('#p3h-re-modal-overlay') ||
               target.closest('#p3h-re-batch-btn') ||
-              target.closest('.p3h-re-trigger-btn'))
+              target.closest('#p3h-re-helper-btn') ||
+              target.closest('.p3h-re-trigger-btn') ||
+              target.closest('.p3h-re-helper-btn') ||
+              target.closest('.p3h-re-item-helper'))
           ) {
             return;
           }
@@ -2986,7 +2989,7 @@
             t &&
               t.closest &&
               t.closest(
-                '#p3h-toolbar, #p3h-drawer, #p3h-drawer-backdrop, #p3h-register-modal, .p3h-cell-meta, #pt-file_table_list, .dataTables_wrapper, #p3h-re-modal-overlay, #p3h-re-batch-btn, .p3h-re-trigger-btn'
+                '#p3h-toolbar, #p3h-drawer, #p3h-drawer-backdrop, #p3h-register-modal, .p3h-cell-meta, #pt-file_table_list, .dataTables_wrapper, #p3h-re-modal-overlay, #p3h-re-batch-btn, .p3h-re-trigger-btn, #p3h-re-helper-btn, .p3h-re-helper-btn, .p3h-re-item-helper'
               )
           );
         });

@@ -938,7 +938,7 @@
         const bestToken = tokens.htmlToken || tokens.jsonToken || tokens.headerToken || '';
 
         const hasPortalMarkers =
-          /pt-file_table_list|pt-side-menu-full|id=["']pt-info["']|id=["']pt-heading["']|estmeasureheaddetails|measurementcheckbox|itemHeadDesc|estimation_measurement/i.test(
+          /pt-file_table_list|pt-side-menu-full|pt-specifications|spectotal|id=["']pt-info["']|id=["']pt-heading["']|estmeasureheaddetails|measurementcheckbox|itemHeadDesc|estimation_measurement/i.test(
             text
           );
         if (

@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "PRICE 3.0 Helper",
   "version": "2.5.0",
-  "description": "Adds Final/Part/M-Book Closed classification, deactivated DPR & stage exclusion, multi-activity finalization & missing-field rescans, AS/TS/Agreement/Contractor/Constituency extraction, Financial Status (% of adjusted TS), 0-150% agreement-period bar & Open M-Book >=75% filter, manual archiving, timestamped milestone progress chronology, multi-select filters, customizable column order, an Activity-wise / File-wise Project Register & Report Builder, and RE Preparation Batch Clear 'To Be Executed' Measurements for Kerala PWD PRICE 3.0.",
+  "description": "Adds Final/Part/M-Book Closed classification, deactivated DPR & stage exclusion, multi-activity finalization & missing-field rescans, AS/TS/Agreement/Contractor/Constituency extraction, Financial Status (% of adjusted TS), 0-150% agreement-period bar & Open M-Book >=75% filter, manual archiving, timestamped milestone progress chronology, multi-select filters, customizable column order, an Activity-wise / File-wise Project Register & Report Builder, and RE Helper (inline DPR/MBook diagnostics plus row-blur 'To Be Executed' editing & deletion) for Kerala PWD PRICE 3.0.",
   "background": {
     "service_worker": "background.js"
   },

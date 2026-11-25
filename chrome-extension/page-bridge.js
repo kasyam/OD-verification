@@ -306,11 +306,30 @@
           typeof window.checkMeasurementTabExists === 'function'
             ? String(window.checkMeasurementTabExists()) === '1'
             : false;
+        const curHeadId =
+          window.CURHEADID !== undefined && window.CURHEADID !== null
+            ? String(window.CURHEADID).trim()
+            : '';
+        const gestId =
+          window.GESTID !== undefined && window.GESTID !== null
+            ? String(window.GESTID).trim()
+            : '';
+        const estEditEl = document.getElementById('estEditId');
+        const estEditId =
+          estEditEl && estEditEl.value !== undefined && estEditEl.value !== null
+            ? String(estEditEl.value).trim()
+            : estEditEl && typeof estEditEl.getAttribute === 'function'
+            ? String(estEditEl.getAttribute('value') || '').trim()
+            : '';
+        const headOrderEl = curHeadId ? document.getElementById('headorderNo' + curHeadId) : null;
+        const headOrderNo =
+          headOrderEl && headOrderEl.value !== undefined && headOrderEl.value !== null
+            ? String(headOrderEl.value).trim()
+            : headOrderEl && typeof headOrderEl.getAttribute === 'function'
+            ? String(headOrderEl.getAttribute('value') || '').trim()
+            : '';
         return {
-          curHeadId:
-            window.CURHEADID !== undefined && window.CURHEADID !== null
-              ? String(window.CURHEADID).trim()
-              : '',
+          curHeadId,
           selTab:
             window.SELTAB !== undefined && window.SELTAB !== null
               ? String(window.SELTAB).trim()
@@ -319,6 +338,9 @@
             window.SELITEM !== undefined && window.SELITEM !== null
               ? String(window.SELITEM).trim()
               : '',
+          gestId,
+          estEditId,
+          headOrderNo,
           hasMeasurementFormOpen,
           canRefreshHeading: typeof window.re_change_heading === 'function',
           canRefreshLeftList: typeof window.call_left_spec_list === 'function',
@@ -351,6 +373,16 @@
         }
         if (rawHeadId && typeof window.call_left_spec_list === 'function') {
           window.call_left_spec_list(rawHeadId, lastHeadSpecId);
+          if (
+            !formOpen &&
+            String(window.SELTAB || '').trim() === 'AM' &&
+            window.SELITEM !== undefined &&
+            window.SELITEM !== null &&
+            String(window.SELITEM).trim() !== '' &&
+            typeof window.re_to_be_executed === 'function'
+          ) {
+            window.re_to_be_executed(String(window.SELITEM).trim());
+          }
           return { refreshed: true, method: 'call_left_spec_list', headId: rawHeadId };
         }
         if (rawHeadId && typeof window.revised_estimation_grand_total === 'function') {
