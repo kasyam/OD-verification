@@ -392,6 +392,118 @@
         return { refreshed: false, method: 'none', headId: rawHeadId };
       }
 
+      case 're:switchHeading': {
+        const targetId = String((payload && payload.headId) || '').replace(/[^\d]/g, '');
+        if (!targetId) {
+          return { ok: false, error: 'Invalid heading ID' };
+        }
+        const formOpen =
+          typeof window.checkMeasurementTabExists === 'function' &&
+          String(window.checkMeasurementTabExists()) === '1';
+        if (formOpen) {
+          return {
+            ok: false,
+            reason: 'measurement_form_open',
+            error: 'Close the open measurement form before switching headings.',
+          };
+        }
+        if (typeof window.re_change_heading !== 'function') {
+          return {
+            ok: false,
+            error: 're_change_heading is unavailable on this page.',
+          };
+        }
+
+        const readSpecTableSignature = () => {
+          const cur = window.CURHEADID !== undefined && window.CURHEADID !== null ? String(window.CURHEADID).trim() : '';
+          const activeLink = document.querySelector('.pt-left-est .pt-number-scroll a.active');
+          const activeOc = activeLink && typeof activeLink.getAttribute === 'function' ? String(activeLink.getAttribute('onclick') || '') : '';
+          const specRows = document.querySelectorAll ? document.querySelectorAll('#pt-specifications tr') : [];
+          const firstAttr = specRows && specRows[0] && specRows[0].getAttribute ? String(specRows[0].getAttribute('id') || '') : '';
+          return `${cur}|${activeOc}|${specRows ? specRows.length : 0}|${firstAttr}`;
+        };
+
+        const activeLinkMatches = (hid) => {
+          const activeLink = document.querySelector('.pt-left-est .pt-number-scroll a.active');
+          if (!activeLink || typeof activeLink.getAttribute !== 'function') return false;
+          const oc = String(activeLink.getAttribute('onclick') || '');
+          const m = oc.match(/re_change_heading\(\s*['"]?(\d+)['"]?\s*\)/i);
+          return Boolean(m && m[1] === hid);
+        };
+
+        const prevSig = readSpecTableSignature();
+        window.re_change_heading(targetId);
+
+        return new Promise((resolve) => {
+          const startTs = Date.now();
+          let ajaxIdleAt = 0;
+          let settled = false;
+          let pollTimer = null;
+          let jq = null;
+          let onAjaxStop = null;
+
+          const cleanup = () => {
+            if (pollTimer) {
+              clearInterval(pollTimer);
+              pollTimer = null;
+            }
+            if (jq && onAjaxStop && typeof jq === 'function') {
+              try {
+                jq(document).off('ajaxStop', onAjaxStop);
+              } catch (_e) {}
+            }
+          };
+
+          const finish = () => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            resolve({
+              ok: true,
+              headId: targetId,
+              curHeadId:
+                window.CURHEADID !== undefined && window.CURHEADID !== null
+                  ? String(window.CURHEADID).trim()
+                  : '',
+            });
+          };
+
+          if (typeof window.jQuery === 'function') {
+            jq = window.jQuery;
+            onAjaxStop = () => {
+              ajaxIdleAt = Date.now();
+            };
+            try {
+              jq(document).on('ajaxStop', onAjaxStop);
+            } catch (_e) {
+              onAjaxStop = null;
+            }
+          }
+
+          const checkReady = () => {
+            if (settled) return;
+            const cur =
+              window.CURHEADID !== undefined && window.CURHEADID !== null
+                ? String(window.CURHEADID).trim()
+                : '';
+            const jqActive = jq && typeof jq.active === 'number' ? jq.active : 0;
+            const headMatched = cur === targetId || activeLinkMatches(targetId);
+            const sigChanged = readSpecTableSignature() !== prevSig;
+            const postAjaxSettled = ajaxIdleAt > 0 && Date.now() - ajaxIdleAt >= 150;
+            if (headMatched && jqActive === 0 && (sigChanged || postAjaxSettled || Date.now() - startTs >= 120)) {
+              finish();
+              return;
+            }
+            if (Date.now() - startTs >= 8000) {
+              finish();
+            }
+          };
+
+          pollTimer = setInterval(checkReady, 50);
+          checkReady();
+        });
+      }
+
       default:
         throw new Error(`Unsupported bridge action: ${String(action || '')}`);
     }
@@ -407,7 +519,14 @@
     if (!req || typeof req.id !== 'string') return;
     try {
       const result = handleAction(req.action, req.payload || null);
-      respond(req.id, true, result);
+      if (result && typeof result.then === 'function') {
+        result.then(
+          (asyncRes) => respond(req.id, true, asyncRes),
+          (err) => respond(req.id, false, null, err && err.message ? err.message : String(err))
+        );
+      } else {
+        respond(req.id, true, result);
+      }
     } catch (err) {
       respond(req.id, false, null, err && err.message ? err.message : String(err));
     }

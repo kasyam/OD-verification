@@ -3606,6 +3606,11 @@ const overlay = require('../overlay.js');
       Boolean,
       Number,
       Error,
+      Promise,
+      setTimeout,
+      clearTimeout,
+      setInterval,
+      clearInterval,
       CustomEvent: class {
         constructor(type, init) {
           this.type = type;
@@ -3615,12 +3620,27 @@ const overlay = require('../overlay.js');
       document: {
         querySelector: () => null,
         querySelectorAll: () => [],
-        getElementById: (id) => (id === 'headorderNo2535244712' && hasHeadOrderNode ? { id } : null),
+        getElementById: (id) =>
+          (id === 'headorderNo2535244712' || id === 'headorderNo2535244999') && hasHeadOrderNode
+            ? { id }
+            : null,
         addEventListener: (name, fn) => {
           bridgeListeners[name] = fn;
         },
         dispatchEvent: (ev) => {
           dispatchedEvents.push(ev);
+          if (ev && ev.type === 'p3h:bridge:res' && typeof ev.detail === 'string') {
+            try {
+              const parsed = JSON.parse(ev.detail);
+              const waiter = asyncWaiters.get(parsed.id);
+              if (waiter) {
+                asyncWaiters.delete(parsed.id);
+                waiter(parsed);
+              }
+            } catch (_e) {
+              // ignore non-JSON events
+            }
+          }
         },
       },
       window: {
@@ -3632,6 +3652,7 @@ const overlay = require('../overlay.js');
         call_left_spec_list: (hid, sid) => calledOps.push(['call_left_spec_list', hid, sid]),
       },
     };
+    const asyncWaiters = new Map();
     vm.createContext(reSandbox);
     vm.runInContext(fs.readFileSync(path.join(extDir, 'page-bridge.js'), 'utf8'), reSandbox, {
       filename: 'page-bridge.js',
@@ -3695,6 +3716,56 @@ const overlay = require('../overlay.js');
       ['call_left_spec_list', '2535244712', '26523254105'],
       ['re_to_be_executed', '26523254105'],
     ]);
+
+    // Async re:switchHeading contract (measurement form guard + async CURHEADID settle + zero window globals)
+    let asyncSeq = 0;
+    const callBridgeAsync = (action, payload) => {
+      const reqId = `async_req_${++asyncSeq}`;
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          asyncWaiters.delete(reqId);
+          reject(new Error(`Timed out waiting for bridge response (${action})`));
+        }, 2000);
+        asyncWaiters.set(reqId, (parsed) => {
+          clearTimeout(timer);
+          resolve(parsed);
+        });
+        bridgeListeners['p3h:bridge:req']({
+          detail: JSON.stringify({ id: reqId, action, payload }),
+        });
+      });
+    };
+
+    calledOps.length = 0;
+    formOpenFlag = '1';
+    hasHeadOrderNode = true;
+    const swBlockedEnvelope = await callBridgeAsync('re:switchHeading', { headId: '2535244999' });
+    assert.equal(swBlockedEnvelope.ok, true);
+    assert.equal(swBlockedEnvelope.result && swBlockedEnvelope.result.ok, false);
+    assert.equal(swBlockedEnvelope.result && swBlockedEnvelope.result.reason, 'measurement_form_open');
+    assert.equal(calledOps.length, 0);
+
+    calledOps.length = 0;
+    formOpenFlag = '0';
+    reSandbox.window.CURHEADID = '2535244712';
+    reSandbox.window.re_change_heading = (hid) => {
+      calledOps.push(['re_change_heading', hid]);
+      setTimeout(() => {
+        reSandbox.window.CURHEADID = String(hid);
+      }, 10);
+    };
+    const swOkEnvelope = await callBridgeAsync('re:switchHeading', { headId: '2535244999' });
+    assert.equal(swOkEnvelope.ok, true);
+    assert.deepEqual(swOkEnvelope.result, {
+      ok: true,
+      headId: '2535244999',
+      curHeadId: '2535244999',
+    });
+    assert.deepEqual(calledOps, [['re_change_heading', '2535244999']]);
+    assert.deepEqual(
+      Object.keys(reSandbox.window).sort(),
+      ['CURHEADID', 'SELITEM', 'SELTAB', 'call_left_spec_list', 'checkMeasurementTabExists', 're_change_heading', 're_to_be_executed']
+    );
   }
 
   // F. Static MutationObserver exclusion checks in overlay.js & re-batch.js
@@ -4044,6 +4115,310 @@ const overlay = require('../overlay.js');
     });
     assert.equal(resBlocked.ok, false);
     assert.equal(resBlocked.formOpen, true);
+  }
+
+  // G. Estimate totals via showApprovedHeadingList.pro, shared #pt-specifications2 parser, and per-dprEstId caching
+  {
+    const estTotals = reBatch.sumDeviationTotals({
+      items: [
+        { origAmount: 1000, reAmount: 1250 },
+        { origAmount: null, reAmount: 250 },
+      ],
+    });
+    assert.equal(estTotals.ok, true);
+    assert.equal(estTotals.dprTotalAmt, 1000);
+    assert.equal(estTotals.reTotalAmt, 1500);
+    assert.equal(estTotals.hasOrigAmt, true);
+    assert.equal(estTotals.rowCount, 2);
+
+    const overImp = reBatch.formatReImpactSummary(1000, 1500, true);
+    assert.equal(overImp.tone, 'over');
+    assert.match(overImp.text, /\+50\.0%/);
+
+    const underImp = reBatch.formatReImpactSummary(1000, 800, true);
+    assert.equal(underImp.tone, 'under');
+    assert.match(underImp.text, /-20\.0%/);
+
+    const extraImp = reBatch.formatReImpactSummary(0, 450, false);
+    assert.equal(extraImp.tone, 'flat');
+    assert.match(extraImp.text, /DPR: — → RE: ₹450/);
+
+    const reWithTotalsTableDoc = parseMiniHtml(`
+      <div>
+        <ul id="pt-side-menu-full">
+          <li>
+            <span>work</span>
+            <ul>
+              <li>
+                <span>Composite Civil Work[PWD/BLDG/EST/93382/2021_9_1_1]</span>
+                <ul>
+                  <li><a onclick="call_basicestimation('tok','233655521')">DPR</a></li>
+                  <li><a onclick="callembook('234143')">eMbook</a></li>
+                  <li><a onclick="callre('234181')">Revised Estimate</a></li>
+                </ul>
+              </li>
+              <li>
+                <span>Composite Electrical Work[PWD/BLDG/EST/93382/2021_17_1_1]</span>
+                <ul>
+                  <li><a onclick="call_basicestimation('tok','237685685')">DPR</a></li>
+                  <li><a onclick="callembook('234144')">eMbook</a></li>
+                  <li><a onclick="callre('234307')">Revised Estimate</a></li>
+                </ul>
+              </li>
+            </ul>
+          </li>
+        </ul>
+        <div id="pt-heading">
+          <h6 class="heading">[ PWD/BLDG/EST/93382/2021_17_1_1/RE 3 ] NABARD-Construction of New Block at FHC Koodal</h6>
+        </div>
+        <div id="pt-parent">
+          <input type="hidden" id="estEditId" value="23021474307">
+          <div class="pt-left-est">
+            <div class="pt-number-scroll">
+              <a onclick="re_change_heading('231119132')" class="active">
+                <input type="hidden" id="headorderNo231119132" value="1">
+                <b class="num">1</b><span class="text">Electrification</span>
+              </a>
+              <a onclick="re_change_heading('234569128')">
+                <input type="hidden" id="headorderNo234569128" value="2">
+                <b class="num">2</b><span class="text">Fire protection arrangements</span>
+              </a>
+              <a onclick="re_change_heading('234569129')">
+                <input type="hidden" id="headorderNo234569129" value="3">
+                <b class="num">3</b><span class="text">SITC of Lift</span>
+              </a>
+              <a onclick="re_change_heading('234569130')">
+                <input type="hidden" id="headorderNo234569130" value="4">
+                <b class="num">4</b><span class="text">Minor civil works</span>
+              </a>
+            </div>
+          </div>
+          <div id="specView">
+            <input type="hidden" id="isextraHead" value="false">
+            <table id="pt-specifications">
+              <tbody>
+                <tr class="current-specification"><td colspan="4"><div class="sp-heading">Electrification</div></td></tr>
+                <tr id="td-23909194064" class="pt-sp-top specSelect specSelect23909194064">
+                  <td class="text-center" onclick="re_to_be_executed(23909194064);">1</td>
+                  <td colspan="2" onclick="re_to_be_executed(23909194064);"><span class="sp-version">1.10.3</span></td>
+                  <td></td>
+                </tr>
+                <tr class="pt-sp-middle specSelect specSelect23909194064">
+                  <td rowspan="2"></td>
+                  <td colspan="3"><p class="sp-content">Wiring for light point Group C</p><div class="pt-wz"></div></td>
+                </tr>
+                <tr class="pt-sp-bottom specSelect specSelect23909194064">
+                  <td><span>366.0</span> <span>point</span></td>
+                  <td><span>@ 1192.56</span></td>
+                  <td><span class="amount-single">₹436476.96</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <table id="pt-specifications2">
+            <tbody>
+              <tr class="pt-sp-top" id="tr-231119132">
+                <td>1</td>
+                <td>Electrification</td>
+                <td>₹3739595.74<input type="hidden" id="headtotal1" name="headtotal" class="headtotal" value="3739595.74"></td>
+                <td>₹3739595.74</td>
+              </tr>
+              <tr class="pt-sp-top" id="tr-234569128">
+                <td>2</td>
+                <td>Fire protection arrangements</td>
+                <td>₹3500661.70<input type="hidden" id="headtotal2" name="headtotal" class="headtotal" value="3500661.70"></td>
+                <td>₹7240257.44</td>
+              </tr>
+              <tr class="pt-sp-top" id="tr-234569129">
+                <td>3</td>
+                <td>SITC of Lift</td>
+                <td>₹2796409.00<input type="hidden" id="headtotal3" name="headtotal" class="headtotal" value="2796409.00"></td>
+                <td>₹10036666.44</td>
+              </tr>
+              <tr class="pt-sp-top" id="tr-234569130">
+                <td>4</td>
+                <td>Minor civil works</td>
+                <td>₹41540.95<input type="hidden" id="headtotal4" name="headtotal" class="headtotal" value="41540.95"></td>
+                <td>₹10078207.39</td>
+              </tr>
+              <tr class="pt-sp-top" id="tr-0">
+                <td>L</td>
+                <td>Lumpsum</td>
+                <td>₹625000.00<input type="hidden" id="headtotal5" name="headtotal" class="headtotal" value="625000.00"></td>
+                <td>₹10703207.39</td>
+              </tr>
+              <tr class="pt-sp-top" id="tr-0">
+                <td>C</td>
+                <td>Additional Charges</td>
+                <td>₹1814077.33<input type="hidden" id="headtotal6" name="headtotal" class="headtotal" value="1814077.33"></td>
+                <td>₹12517284.72</td>
+              </tr>
+            </tbody>
+          </table>
+          <div id="pt-slide-right">
+            <ul id="tabs">
+              <li class="pt-tab-right">
+                <a id="updateMeasurementsMbook" onclick="updateREMbookMeasurements('2685432619')">Sync</a>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    `);
+
+    const pageTotals = reBatch.extractRePageTotalsFromDoc(reWithTotalsTableDoc, '234569129');
+    assert.equal(pageTotals.ok, true);
+    assert.equal(pageTotals.matchedActiveHead, true);
+    assert.deepEqual(pageTotals.specHeadIds, ['231119132', '234569128', '234569129', '234569130']);
+    assert.ok(Math.abs(pageTotals.specsReTotal - 10078207.39) < 0.01);
+    assert.ok(Math.abs(pageTotals.otherSpecsReAmt - 7281798.39) < 0.01);
+    assert.ok(Math.abs(pageTotals.extraChargesReAmt - 2439077.33) < 0.01);
+    assert.ok(Math.abs(pageTotals.grandReTotal - 12517284.72) < 0.01);
+
+    const dprHeadingListHtml = `
+      <table id="pt-specifications2" class="table table-bordered pt-table">
+        <tr class="pt-sp-top "><td>1</td><td>Electrification</td><td><input type="hidden" id="headtotal1" name="headtotal" class="headtotal" value="3312967.76"> 3312967.76</td><td>3312967.76</td></tr>
+        <tr class="pt-sp-top "><td>2</td><td>Fire protection arrangements</td><td><input type="hidden" id="headtotal2" name="headtotal" class="headtotal" value="2700265.0"> 2700265.00</td><td>6013232.76</td></tr>
+        <tr class="pt-sp-top "><td>3</td><td>SITC of Lift</td><td><input type="hidden" id="headtotal3" name="headtotal" class="headtotal" value="2796409.0"> 2796409.00</td><td>8809641.76</td></tr>
+        <tr class="pt-sp-top "><td>4</td><td>Minor civil works</td><td><input type="hidden" id="headtotal4" name="headtotal" class="headtotal" value="41540.95"> 41540.95</td><td>8851182.71</td></tr>
+        <tr class="pt-sp-top "><td>L</td><td>Lumpsum</td><td><input type="hidden" id="headtotal5" name="headtotal" class="headtotal" value="625000.00"> 625000.00</td><td>9476182.71</td></tr>
+        <tr class="pt-sp-top bg-grey"><td>C</td><td>Additional Charges</td><td><input type="hidden" id="headtotal6" name="headtotal" class="headtotal" value="1593212.89"> 1593212.89</td><td>11069395.60</td></tr>
+      </table>
+    `;
+
+    const dprHeadParsed = reBatch.parseApprovedDprHeadingTotalsHtml(dprHeadingListHtml);
+    assert.equal(dprHeadParsed.ok, true);
+    assert.equal(dprHeadParsed.rowCount, 6);
+    assert.ok(Math.abs(dprHeadParsed.specsDprTotal - 8851182.71) < 0.01);
+    assert.ok(Math.abs(dprHeadParsed.extraChargesDprAmt - 2218212.89) < 0.01);
+    assert.ok(Math.abs(dprHeadParsed.grandDprTotal - 11069395.60) < 0.01);
+
+    const makeDevHtml = (origAmt, reAmt) => `
+      <table id="pt-specifications">
+        <thead>
+          <tr><th rowspan="2">No</th><th colspan="3">Original Estimate</th></tr>
+          <tr><th>Quantity</th><th>Rate</th><th>Amount</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td rowspan="3">1</td><td>1.1.1</td><td>each</td>
+            <td><a id="add1001" onclick="addRESpecRemark(1001)">Remark</a></td>
+          </tr>
+          <tr><td colspan="16">Heading item</td></tr>
+          <tr>
+            <td>1.000</td><td>${origAmt.toFixed(2)}</td><td>${origAmt.toFixed(2)}</td><td>N.A</td><td>N.A</td>
+            <td>1.000</td><td>0.000</td><td>1.000</td><td>${reAmt.toFixed(2)}</td><td>${reAmt.toFixed(2)}</td>
+            <td>0.00</td><td>0.00</td><td>N.A</td><td>N.A</td><td>N.A</td><td>100.00</td>
+          </tr>
+        </tbody>
+      </table>
+    `;
+
+    const estCalls = [];
+    const estCache = {
+      byHeadingKey: new Map(),
+      pendingAeByActivityId: new Map(),
+      pendingEntriesAeByActivityId: new Map(),
+      dprTotalsByDprEstId: new Map(),
+    };
+    const estPostForm = async (ep, params) => {
+      estCalls.push({ ep, params });
+      if (ep === 're_deviation_statement.pro') {
+        if (params.estHeadId === '231119132' || params.estHeadId === '') {
+          return makeDevHtml(3312967.76, 3739595.74);
+        }
+        if (params.estHeadId === '234569128') return makeDevHtml(2700265.0, 3500661.7);
+        if (params.estHeadId === '234569129') return makeDevHtml(2796409.0, 2796409.0);
+        if (params.estHeadId === '234569130') return makeDevHtml(41540.95, 41540.95);
+        throw new Error('Unexpected estHeadId: ' + params.estHeadId);
+      }
+      if (ep === 'showApprovedHeadingList.pro') {
+        assert.equal(params.estId, '237685685');
+        return dprHeadingListHtml;
+      }
+      if (ep === 'embookAE_pending_head.pro') return mbHeadHtml;
+      if (ep === 'mbook_pending_ae.pro') return mbPendingHtml;
+      if (ep === 'revised_estimation.pro') return '<input type="hidden" id="estEditId" value="23021474307">';
+      if (ep === 'change_re_heading.pro') return '<div>ok</div>';
+      if (ep === 'call_to_be_executed.pro') return '<div>tbe</div>';
+      throw new Error('Unexpected endpoint: ' + ep);
+    };
+
+    const r1 = await reBatch.fetchReHeadingHelperData({
+      doc: reWithTotalsTableDoc,
+      bridgeCtx: { curHeadId: '231119132', selTab: 'AM', selItem: '23909194064', headOrderNo: '1' },
+      postForm: estPostForm,
+      cache: estCache,
+    });
+    assert.equal(r1.ok, true);
+    assert.deepEqual(
+      estCalls.filter((c) => c.ep === 'showApprovedHeadingList.pro').map((c) => c.params),
+      [{ estId: '237685685' }]
+    );
+    assert.equal(estCalls.some((c) => c.ep === 'revised_estimation.pro'), true);
+    assert.equal(estCalls.some((c) => c.ep === 'change_re_heading.pro'), true);
+    assert.equal(estCalls.some((c) => c.ep === 'call_to_be_executed.pro'), true);
+    assert.equal(r1.bundle.dprTotals.ok, true);
+    assert.ok(Math.abs(r1.bundle.dprTotals.specsDprTotal - 8851182.71) < 0.01);
+    assert.ok(Math.abs(r1.bundle.dprTotals.grandDprTotal - 11069395.60) < 0.01);
+
+    estCalls.length = 0;
+    const r2 = await reBatch.fetchReHeadingHelperData({
+      doc: reWithTotalsTableDoc,
+      bridgeCtx: { curHeadId: '234569128', selTab: 'AH', selItem: '', headOrderNo: '2' },
+      contextOverride: { headId: '234569128', headOrderNo: '2', selTab: 'AH', selItem: '' },
+      postForm: estPostForm,
+      cache: estCache,
+    });
+    assert.equal(r2.ok, true);
+    assert.equal(estCalls.filter((c) => c.ep === 'showApprovedHeadingList.pro').length, 0);
+    assert.equal(r2.bundle.dprTotals, r1.bundle.dprTotals);
+
+    const primeCalls = [];
+    let showHeadingAttempt = 0;
+    const primeCache = {
+      byHeadingKey: new Map(),
+      pendingAeByActivityId: new Map(),
+      pendingEntriesAeByActivityId: new Map(),
+      dprTotalsByDprEstId: new Map(),
+    };
+    const primePostForm = async (ep, params) => {
+      primeCalls.push({ ep, params });
+      if (ep === 're_deviation_statement.pro') return makeDevHtml(3312967.76, 3739595.74);
+      if (ep === 'showApprovedHeadingList.pro') {
+        assert.equal(params.estId, '237685685');
+        showHeadingAttempt += 1;
+        return showHeadingAttempt === 1 ? '<table></table>' : dprHeadingListHtml;
+      }
+      if (ep === 'approvedEstimationView.pro') {
+        assert.equal(params.estId, '237685685');
+        return '<div>primed</div>';
+      }
+      if (ep === 'embookAE_pending_head.pro') return mbHeadHtml;
+      if (ep === 'mbook_pending_ae.pro') return mbPendingHtml;
+      if (ep === 'revised_estimation.pro') return '<input type="hidden" id="estEditId" value="23021474307">';
+      if (ep === 'change_re_heading.pro') return '<div>ok</div>';
+      if (ep === 'call_to_be_executed.pro') return '<div>tbe</div>';
+      throw new Error('Unexpected endpoint: ' + ep);
+    };
+
+    const rPrime = await reBatch.fetchReHeadingHelperData({
+      doc: reWithTotalsTableDoc,
+      bridgeCtx: { curHeadId: '231119132', selTab: 'AM', selItem: '23909194064', headOrderNo: '1' },
+      postForm: primePostForm,
+      cache: primeCache,
+    });
+    assert.equal(rPrime.ok, true);
+    assert.deepEqual(
+      primeCalls.filter((c) => c.ep === 'showApprovedHeadingList.pro').map((c) => c.params),
+      [{ estId: '237685685' }, { estId: '237685685' }]
+    );
+    assert.deepEqual(
+      primeCalls.filter((c) => c.ep === 'approvedEstimationView.pro').map((c) => c.params),
+      [{ estId: '237685685' }]
+    );
+    assert.equal(rPrime.bundle.dprTotals.ok, true);
+    assert.ok(Math.abs(rPrime.bundle.dprTotals.grandDprTotal - 11069395.60) < 0.01);
   }
 }
 
@@ -4960,6 +5335,659 @@ const overlay = require('../overlay.js');
   const reBatchFinalSrc = fs.readFileSync(path.join(extDir, 're-batch.js'), 'utf8');
   assert.equal(/\beval\s*\(/.test(reBatchFinalSrc), false);
   assert.equal(/new\s+Function\s*\(/.test(reBatchFinalSrc), false);
+}
+
+// ---------------------------------------------------------------------------
+// 16. Live e-MBook Pending-AE Edit/Delete Helpers, Controllers & UI Badge Tests
+// ---------------------------------------------------------------------------
+{
+  // A. Full 3-row parseMbookPendingAeHtml preserves pendingBySpecId contract + populates entriesBySpecId
+  const fullPendingHtml = `
+    <table id="pt-specifications">
+      <tr class="pt-sp-top specSelect head235101941450">
+        <td rowspan="3">58</td>
+        <td>MGN:1_76_1</td>
+        <td>90.16.1.6</td>
+        <td>24-11-2026</td>
+      </tr>
+      <tr class="pt-sp-middle specSelect head235101941450">
+        <td colspan="5" onclick="selectSpec('head235101941450'); callnewmeasurementright_pending('23510194145','234144','27001')">
+          <p class="sp-content">Laying pipe line</p>
+        </td>
+      </tr>
+      <tr>
+        <td colspan="3"><b>Total</b></td>
+        <td><b>90.00000</b></td>
+        <td><b>metre</b></td>
+      </tr>
+      <!-- Duplicate entryHeadId should be skipped -->
+      <tr class="pt-sp-top specSelect head235101941450">
+        <td rowspan="3">58</td><td>MGN:1_76_1</td><td>90.16.1.6</td><td>24-11-2026</td>
+      </tr>
+      <tr class="pt-sp-middle specSelect head235101941450">
+        <td colspan="5" onclick="callnewmeasurementright_pending('23510194145','234144','27001')"><p class="sp-content">Duplicate</p></td>
+      </tr>
+      <tr><td colspan="3"><b>Total</b></td><td><b>90.00000</b></td><td><b>metre</b></td></tr>
+    </table>
+  `;
+  const parsedFullPend = reBatch.parseMbookPendingAeHtml(fullPendingHtml);
+  assert.equal(parsedFullPend.ok, true);
+  assert.deepEqual(parsedFullPend.pendingBySpecId.get('23510194145'), {
+    pendingQty: 90,
+    entryCount: 1,
+  });
+  const entries58 = parsedFullPend.entriesBySpecId.get('23510194145');
+  assert.equal(entries58.length, 1);
+  assert.deepEqual(entries58[0], {
+    entryHeadId: '27001',
+    activityId: '234144',
+    specId: '23510194145',
+    slNo: '58',
+    mgn: '1_76_1',
+    specCode: '90.16.1.6',
+    entryDate: '24-11-2026',
+    desc: 'Laying pipe line',
+    qty: 90,
+    unit: 'metre',
+  });
+
+  // B. parseMbookEntryDetailsHtml scopes strictly to #t6 Draft tab and ignores #t7 Accepted tab
+  const detailsHtml = `
+    <div id="t6">
+      <div id="menuContent">
+        <a onclick="edit_measurement('234144','23510194145','','')">Edit</a>
+        <a onclick="delete_measurement_common('23510194145','234144')">Delete</a>
+      </div>
+      <table id="pt-specifications2">
+        <tbody>
+          <tr class="pt-sp-top">
+            <td><input type="checkbox" id="coefficientvalDraft" name="coefficientval"></td>
+            <td colspan="5">4</td><td colspan="2">Normal Measurement</td><td>Asset</td>
+          </tr>
+          <tr class="pt-sp-top">
+            <td><input type="checkbox" id="mcheckbox" name="mcheckbox" value="9901" checked="checked"></td>
+            <td>Main trench</td><td>2</td><td>15.000</td><td>1.500</td><td>2.000</td><td>-</td><td>90.000</td><td>cum</td>
+          </tr>
+          <tr class="pt-sp-top">
+            <td><input type="checkbox" id="mcheckbox" name="mcheckbox" value="9902" checked="checked"></td>
+            <td>Side trench</td><td>1</td><td>—</td><td>—</td><td>—</td><td>0.5</td><td>5.000</td><td>cum</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div id="t7">
+      <table id="pt-specifications2">
+        <tbody>
+          <tr><td><input type="checkbox" name="mcheckbox" value="8888"></td><td>Accepted row</td><td>1</td><td>1</td><td>1</td><td>1</td><td>-</td><td>1.000</td><td>cum</td></tr>
+        </tbody>
+      </table>
+    </div>
+  `;
+  const parsedDetails = reBatch.parseMbookEntryDetailsHtml(detailsHtml);
+  assert.equal(parsedDetails.ok, true);
+  assert.equal(parsedDetails.canEdit, true);
+  assert.equal(parsedDetails.canDelete, true);
+  assert.equal(parsedDetails.rows.length, 2);
+  assert.equal(parsedDetails.rows[0].measurementId, '9901');
+  assert.equal(parsedDetails.rows[0].cf, '');
+  assert.equal(parsedDetails.rows[1].measurementId, '9902');
+  assert.equal(parsedDetails.rows[1].length, '');
+  assert.equal(parsedDetails.rows[1].cf, '0.5');
+
+  const noDraftDetails = reBatch.parseMbookEntryDetailsHtml('<div id="t7"><table></table></div>');
+  assert.equal(noDraftDetails.ok, true);
+  assert.equal(noDraftDetails.rows.length, 0);
+
+  // C. parseMbookEditFormHtml & buildMbookUpdateParams (-1 -> na, 0-based items, no mcheckbox, plain numbers only)
+  const editFormHtml = `
+    <form id="addmeasurementtabsaveform" method="post">
+      <select id="coefficient" name="coefficient">
+        <option value="-1" selected="selected">Coefficient</option>
+        <option value="na">NA</option>
+      </select>
+      <input type="hidden" id="span_Text_global" name="span_Text_global" value="SPAN_1">
+      <input type="hidden" id="estheadspec_id" name="estheadspecid" value="23510194145">
+      <table><tbody>
+        <tr id="rec-0">
+          <td><input type="checkbox" name="mcheckbox" value="0"></td>
+          <td>
+            <input type="hidden" name="eMbookMeasurementsPojoItems[0].dataId" value="5501">
+            <input type="hidden" name="eMbookMeasurementsPojoItems[0].measurementId" value="9901">
+            <input type="text" name="eMbookMeasurementsPojoItems[0].measureddescription" value="Main trench">
+          </td>
+          <td><input type="text" name="eMbookMeasurementsPojoItems[0].measuredno" value="2"></td>
+          <td><input type="text" name="eMbookMeasurementsPojoItems[0].measuredlength" value="15.000"></td>
+          <td><input type="text" name="eMbookMeasurementsPojoItems[0].measuredbreadth" value=""></td>
+          <td><input type="text" name="eMbookMeasurementsPojoItems[0].measureddepth" value=""></td>
+          <td>
+            <input type="text" name="eMbookMeasurementsPojoItems[0].combobx_id" value="">
+            <input type="text" name="eMbookMeasurementsPojoItems[0].combobx" value="">
+          </td>
+          <td><input type="text" name="eMbookMeasurementsPojoItems[0].measuredquantity" value="30.000"></td>
+        </tr>
+        <tr id="rec-1">
+          <td><input type="checkbox" name="mcheckbox" value="1"></td>
+          <td>
+            <input type="hidden" name="eMbookMeasurementsPojoItems[1].dataId" value="5502">
+            <input type="hidden" name="eMbookMeasurementsPojoItems[1].measurementId" value="9902">
+            <input type="text" name="eMbookMeasurementsPojoItems[1].measureddescription" value="Side trench">
+          </td>
+          <td><input type="text" name="eMbookMeasurementsPojoItems[1].measuredno" value="1"></td>
+          <td><input type="text" name="eMbookMeasurementsPojoItems[1].measuredlength" value="10"></td>
+          <td><input type="text" name="eMbookMeasurementsPojoItems[1].measuredbreadth" value=""></td>
+          <td><input type="text" name="eMbookMeasurementsPojoItems[1].measureddepth" value=""></td>
+          <td>
+            <input type="text" name="eMbookMeasurementsPojoItems[1].combobx_id" value="12">
+            <input type="text" name="eMbookMeasurementsPojoItems[1].combobx" value="0.5">
+          </td>
+          <td><input type="text" name="eMbookMeasurementsPojoItems[1].measuredquantity" value="5.000"></td>
+        </tr>
+      </tbody></table>
+      <button type="button" onclick="saveMeasurementsEmbook('27001')">Save</button>
+    </form>
+  `;
+  const parsedEdit = reBatch.parseMbookEditFormHtml(editFormHtml, '');
+  assert.equal(parsedEdit.ok, true);
+  assert.equal(parsedEdit.entryHeadId, '27001');
+  assert.equal(parsedEdit.spanTextGlobal, 'SPAN_1');
+  assert.equal(parsedEdit.estheadspecid, '23510194145');
+  assert.equal(parsedEdit.coefficient, 'na');
+  assert.equal(parsedEdit.rows.length, 2);
+  assert.equal(parsedEdit.rows[1].combobxId, '12');
+  assert.equal(parsedEdit.rows[1].combobx, '0.5');
+
+  const builtOk = reBatch.buildMbookUpdateParams(parsedEdit, [
+    { desc: 'Updated main', no: '3', length: '10', breadth: '', depth: '' },
+    { desc: 'Side trench', no: '2', length: '5', breadth: '', depth: '' },
+  ]);
+  assert.equal(builtOk.ok, true);
+  assert.equal(Object.prototype.hasOwnProperty.call(builtOk.params, 'mcheckbox'), false);
+  assert.equal(builtOk.params.coefficient, 'na');
+  assert.equal(builtOk.params['eMbookMeasurementsPojoItems[0].measuredno'], '3.000');
+  assert.equal(builtOk.params['eMbookMeasurementsPojoItems[0].measuredbreadth'], '');
+  assert.equal(builtOk.params['eMbookMeasurementsPojoItems[0].measuredquantity'], '30.000');
+  assert.equal(builtOk.params['eMbookMeasurementsPojoItems[1].measuredquantity'], '5.000');
+  assert.equal(builtOk.totalQty, 35);
+
+  const builtFormulaRejected = reBatch.buildMbookUpdateParams(parsedEdit, [
+    { desc: 'Formula', no: '2*3', length: '10', breadth: '', depth: '' },
+    { desc: 'Side', no: '1', length: '5', breadth: '', depth: '' },
+  ]);
+  assert.equal(builtFormulaRejected.ok, false);
+
+  // D. parseMbookMutationResponse contracts
+  assert.equal(reBatch.parseMbookMutationResponse(JSON.stringify({ status: 'A' }), 'save').sessionExpired, true);
+  assert.equal(
+    reBatch.parseMbookMutationResponse(JSON.stringify({ busstatus: 'F', message: 'Invalid data' }), 'save').ok,
+    false
+  );
+  assert.equal(
+    reBatch.parseMbookMutationResponse(JSON.stringify({ message: 'Please choose coefficient' }), 'save').ok,
+    false
+  );
+  assert.equal(
+    reBatch.parseMbookMutationResponse(JSON.stringify({ message: 'Updated Successfully' }), 'save').ok,
+    true
+  );
+  assert.equal(
+    reBatch.parseMbookMutationResponse(JSON.stringify({ busstatus: 'T', message: 'Deleted' }), 'delete').ok,
+    true
+  );
+  assert.equal(
+    reBatch.parseMbookMutationResponse(JSON.stringify({ busstatus: 'F', message: 'Cannot delete' }), 'delete').ok,
+    false
+  );
+
+  // E. Controllers: saveMbookPendingEntry & deleteMbookPendingRows (ordering, cross-heading cache sync, mismatch abort + restore, session-expired skip, open-form guard)
+  {
+    const calls = [];
+    const multiHeadingCache = {
+      byHeadingKey: new Map([
+        [
+          '2685432619|231119132',
+          {
+            context: { reEstId: '2685432619', headId: '231119132', activityId: '234144' },
+            mbookTotalsBySpecId: new Map([['23510194145', 152]]),
+            mbookPendingBySpecId: new Map([['23510194145', { pendingQty: 90, entryCount: 1 }]]),
+            mbookPendingEntriesBySpecId: new Map(),
+          },
+        ],
+        [
+          '2685432619|234569128',
+          {
+            context: { reEstId: '2685432619', headId: '234569128', activityId: '234144' },
+            mbookTotalsBySpecId: new Map([['23510194145', 152]]),
+            mbookPendingBySpecId: new Map([['23510194145', { pendingQty: 90, entryCount: 1 }]]),
+            mbookPendingEntriesBySpecId: new Map(),
+          },
+        ],
+      ]),
+      pendingAeByActivityId: new Map(),
+      pendingEntriesAeByActivityId: new Map(),
+    };
+
+    const updatedPendingHtml = `
+      <table id="pt-specifications">
+        <tr class="pt-sp-top"><td rowspan="3">58</td><td>MGN:1_76_1</td><td>90.16.1.6</td><td>24-11-2026</td></tr>
+        <tr class="pt-sp-middle"><td colspan="5" onclick="callnewmeasurementright_pending('23510194145','234144','27001')"><p class="sp-content">Updated</p></td></tr>
+        <tr><td colspan="3"><b>Total</b></td><td><b>35.00000</b></td><td><b>cum</b></td></tr>
+      </table>
+    `;
+
+    const saveRes = await reBatch.saveMbookPendingEntry({
+      specId: '23510194145',
+      entry: { entryHeadId: '27001', activityId: '234144', qty: 90 },
+      rows: [
+        { desc: 'Updated main', no: '3', length: '10', breadth: '', depth: '' },
+        { desc: 'Side trench', no: '2', length: '5', breadth: '', depth: '' },
+      ],
+      expectedMeasurementIds: ['9901', '9902'],
+      ctx: { reEstId: '2685432619', headId: '231119132', headOrderNo: '1', selTab: 'AM', selItem: '23909194064', activityId: '234144' },
+      cache: multiHeadingCache,
+      postForm: async (ep, params) => {
+        calls.push({ ep, params });
+        if (ep === 'newrightmeasurement_pending.pro') {
+          assert.equal(params.measuredqty, '');
+          return detailsHtml;
+        }
+        if (ep === 'mbookmeasurementedit.pro') {
+          if (!Object.prototype.hasOwnProperty.call(params, 'span_text')) {
+            const err = new Error('HTTP_400');
+            err.statusCode = 400;
+            err.endpoint = ep;
+            err.detail = "Required parameter 'span_text' is not present.";
+            throw err;
+          }
+          assert.equal(params.span_text, '');
+          return editFormHtml;
+        }
+        if (ep === 'updateMeasurementsEmbook.pro') return JSON.stringify({ message: 'Saved successfully' });
+        if (ep === 'mbook_pending_ae.pro') return updatedPendingHtml;
+        if (ep === 'revised_estimation.pro') return '<input id="estEditId" value="999">';
+        if (ep === 'change_re_heading.pro') return '<div>ok</div>';
+        if (ep === 'call_to_be_executed.pro') return '<div>tbe</div>';
+        throw new Error('Unexpected endpoint ' + ep);
+      },
+    });
+    assert.equal(saveRes.ok, true);
+    assert.deepEqual(
+      calls.map((c) => c.ep),
+      [
+        'newrightmeasurement_pending.pro',
+        'mbookmeasurementedit.pro',
+        'updateMeasurementsEmbook.pro',
+        'mbook_pending_ae.pro',
+        'revised_estimation.pro',
+        'change_re_heading.pro',
+        'call_to_be_executed.pro',
+      ]
+    );
+    // Accepted was 152 - 90 = 62; after save pending = 35 -> total = 97 across BOTH headings
+    assert.equal(multiHeadingCache.byHeadingKey.get('2685432619|231119132').mbookTotalsBySpecId.get('23510194145'), 97);
+    assert.equal(multiHeadingCache.byHeadingKey.get('2685432619|234569128').mbookTotalsBySpecId.get('23510194145'), 97);
+
+    // Pre-write mismatch aborts before delete_measurement_common.pro & still runs restoreReSession
+    calls.length = 0;
+    const staleDel = await reBatch.deleteMbookPendingRows({
+      specId: '23510194145',
+      entry: { entryHeadId: '27001', activityId: '234144', qty: 35 },
+      measurementIds: ['9909'],
+      ctx: { reEstId: '2685432619', headId: '231119132', headOrderNo: '1', activityId: '234144' },
+      cache: multiHeadingCache,
+      postForm: async (ep) => {
+        calls.push(ep);
+        if (ep === 'newrightmeasurement_pending.pro') return detailsHtml;
+        if (ep === 'revised_estimation.pro') return '<div>re</div>';
+        if (ep === 'change_re_heading.pro') return '<div>ok</div>';
+        throw new Error('Must not call ' + ep);
+      },
+    });
+    assert.equal(staleDel.ok, false);
+    assert.equal(staleDel.stale, true);
+    assert.deepEqual(calls, ['newrightmeasurement_pending.pro', 'revised_estimation.pro', 'change_re_heading.pro']);
+
+    // SESSION_EXPIRED skips restoreReSession
+    calls.length = 0;
+    const sessExpRes = await reBatch.deleteMbookPendingRows({
+      specId: '23510194145',
+      entry: { entryHeadId: '27001', activityId: '234144', qty: 35 },
+      measurementIds: ['9901'],
+      ctx: { reEstId: '2685432619', headId: '231119132', activityId: '234144' },
+      postForm: async (ep) => {
+        calls.push(ep);
+        if (ep === 'newrightmeasurement_pending.pro') return JSON.stringify({ status: 'A' });
+        throw new Error('Should not restore after SESSION_EXPIRED: ' + ep);
+      },
+    });
+    assert.equal(sessExpRes.ok, false);
+    assert.equal(sessExpRes.sessionExpired, true);
+    assert.deepEqual(calls, ['newrightmeasurement_pending.pro']);
+
+    // Open measurement form guard makes 0 requests
+    calls.length = 0;
+    const blockedOpenForm = await reBatch.saveMbookPendingEntry({
+      specId: '23510194145',
+      entry: { entryHeadId: '27001', activityId: '234144' },
+      rows: [],
+      expectedMeasurementIds: ['9901'],
+      ctx: { hasMeasurementFormOpen: true, activityId: '234144' },
+      postForm: async (ep) => {
+        calls.push(ep);
+        return '';
+      },
+    });
+    assert.equal(blockedOpenForm.ok, false);
+    assert.equal(blockedOpenForm.formOpen, true);
+    assert.equal(calls.length, 0);
+  }
+
+  // F. Clickable badge rendering in formatModalMbookCellHtml
+  {
+    const htmlWithPend = reBatch.formatModalMbookCellHtml(
+      {
+        hasMbookSource: true,
+        mbookAcceptedQty: 62,
+        mbookPendingQty: 89.4,
+        mbookTotalQty: 151.4,
+        mbookPendingCount: 2,
+        hasPendingAe: true,
+        hasUnsyncedMbook: false,
+      },
+      '23510194145'
+    );
+    assert.match(htmlWithPend, /<button[^>]+class="p3h-re-mb-pending p3h-re-mb-pending-btn"[^>]+data-specid="23510194145"/);
+
+    const htmlNoPend = reBatch.formatModalMbookCellHtml(
+      {
+        hasMbookSource: true,
+        mbookAcceptedQty: 62,
+        mbookPendingQty: 0,
+        mbookTotalQty: 62,
+        mbookPendingCount: 0,
+        hasPendingAe: false,
+        hasUnsyncedMbook: false,
+      },
+      '23510194145'
+    );
+    assert.equal(/p3h-re-mb-pending-btn/.test(htmlNoPend), false);
+  }
+
+  // G. Regression tests for mbookmeasurementedit.pro span_text: '' + HTTP_400 ProblemDetail diagnostics + per-entry isolation
+  {
+    const loadCalls = [];
+    const loadRes = await reBatch.loadMbookPendingEntries({
+      specId: '23510194145',
+      entries: [{ entryHeadId: '27001', activityId: '234144', qty: 90 }],
+      ctx: { reEstId: '2685432619', headId: '231119132', headOrderNo: '1', activityId: '234144' },
+      postForm: async (ep, params) => {
+        loadCalls.push({ ep, params });
+        if (ep === 'newrightmeasurement_pending.pro') {
+          assert.equal(params.measuredqty, '');
+          return detailsHtml;
+        }
+        if (ep === 'mbookmeasurementedit.pro') {
+          assert.equal(params.span_text, '');
+          return editFormHtml;
+        }
+        if (ep === 'revised_estimation.pro') return '<input id="estEditId" value="999">';
+        if (ep === 'change_re_heading.pro') return '<div>ok</div>';
+        throw new Error('Unexpected endpoint ' + ep);
+      },
+    });
+    assert.equal(loadRes.ok, true);
+    assert.equal(loadRes.entries.length, 1);
+    assert.equal(loadRes.entries[0].loadError, '');
+    assert.equal(loadRes.entries[0].editMeta.entryHeadId, '27001');
+    assert.deepEqual(
+      loadCalls.map((c) => c.ep),
+      ['newrightmeasurement_pending.pro', 'mbookmeasurementedit.pro', 'revised_estimation.pro', 'change_re_heading.pro']
+    );
+
+    // Per-entry isolation when one entry throws HTTP_400 ProblemDetail
+    let isoResSawFirst = false;
+    const isoRes = await reBatch.loadMbookPendingEntries({
+      specId: '23510194145',
+      entries: [
+        { entryHeadId: '27001', activityId: '234144', qty: 90 },
+        { entryHeadId: '27002', activityId: '234144', qty: 35 },
+      ],
+      ctx: { reEstId: '2685432619', headId: '231119132', headOrderNo: '1', activityId: '234144' },
+      postForm: async (ep, params) => {
+        if (ep === 'newrightmeasurement_pending.pro') return detailsHtml;
+        if (ep === 'mbookmeasurementedit.pro') {
+          if (params.colList === '9901,9902' && !isoResSawFirst) {
+            isoResSawFirst = true;
+            const err = new Error('HTTP_400');
+            err.statusCode = 400;
+            err.endpoint = 'mbookmeasurementedit.pro';
+            err.detail = 'Bad param';
+            throw err;
+          }
+          return editFormHtml;
+        }
+        if (ep === 'revised_estimation.pro') return '<input id="estEditId" value="999">';
+        if (ep === 'change_re_heading.pro') return '<div>ok</div>';
+        throw new Error('Unexpected endpoint ' + ep);
+      },
+    });
+    assert.equal(isoRes.ok, true);
+    assert.equal(isoRes.entries.length, 2);
+    assert.equal(isoRes.entries[0].loadError, 'HTTP_400 (mbookmeasurementedit.pro): Bad param');
+    assert.equal(isoRes.entries[0].details.rows.length, 2);
+    assert.equal(isoRes.entries[0].editMeta, null);
+    assert.equal(isoRes.entries[1].loadError, '');
+    assert.equal(isoRes.entries[1].editMeta.rows.length, 2);
+  }
+
+  // H. extractor.postForm attaches err.detail and err.endpoint on Spring Boot ProblemDetail HTTP 400
+  {
+    const origFetch2 = globalThis.fetch;
+    const origGtoken2 = globalThis.GTOKEN;
+    try {
+      globalThis.GTOKEN = 'T_HTTP400';
+      globalThis.fetch = async () => ({
+        ok: false,
+        status: 400,
+        url: 'https://price3.kerala.gov.in/price3_pwd/mbookmeasurementedit.pro',
+        headers: { get: () => null },
+        text: async () =>
+          JSON.stringify({
+            type: 'about:blank',
+            title: 'Bad Request',
+            status: 400,
+            detail: "Required parameter 'span_text' is not present.",
+            instance: '/price3_pwd/mbookmeasurementedit.pro',
+          }),
+      });
+      await assert.rejects(
+        () => extractor.postForm('mbookmeasurementedit.pro', { colList: '9901' }, true),
+        (err) =>
+          err &&
+          err.message === 'HTTP_400' &&
+          err.statusCode === 400 &&
+          err.endpoint === 'mbookmeasurementedit.pro' &&
+          err.detail === "Required parameter 'span_text' is not present."
+      );
+    } finally {
+      globalThis.fetch = origFetch2;
+      globalThis.GTOKEN = origGtoken2;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 17. RE Helper Modal Upgrades (Split-Up Card, Demoted Delete, Heading Switcher, Sync Overlay)
+// ---------------------------------------------------------------------------
+{
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const { fileURLToPath } = require('node:url');
+  const extDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const reBatchSrc = fs.readFileSync(path.join(extDir, 're-batch.js'), 'utf8');
+  const overlayCssSrc = fs.readFileSync(path.join(extDir, 'overlay.css'), 'utf8');
+
+  // 17.A TBE Cell & Split-Up Card Contract
+  {
+    assert.equal(typeof reBatch.formatModalTbeCellHtml, 'function');
+    const item = { headspecid: '23510194145' };
+    const plainHtml = reBatch.formatModalTbeCellHtml(item, {
+      reTbeQty: 12.5,
+      isDoubledTbe: false,
+      dprBalanceQty: 5,
+    });
+    const doubledHtml = reBatch.formatModalTbeCellHtml(item, {
+      reTbeQty: 100,
+      isDoubledTbe: true,
+      dprBalanceQty: 0,
+    });
+
+    for (const html of [plainHtml, doubledHtml]) {
+      const cellDoc = parseMiniHtml(html);
+      assert.ok(cellDoc.querySelector('input.p3h-re-tbe-input'));
+      assert.ok(cellDoc.querySelector('.p3h-re-row-bal-btn'));
+      assert.ok(cellDoc.querySelector('.p3h-re-row-del-btn'));
+      assert.equal(cellDoc.querySelector('.p3h-re-split-toggle'), null);
+      assert.equal(cellDoc.querySelector('.p3h-re-split-caret'), null);
+      assert.equal(cellDoc.querySelector('.p3h-re-split-count'), null);
+      assert.equal(html.includes('p3h-re-split-toggle'), false);
+      assert.equal(html.includes('p3h-re-split-caret'), false);
+      assert.equal(html.includes('p3h-re-split-count'), false);
+    }
+
+    assert.equal(reBatchSrc.includes('p3h-re-split-row'), false);
+    assert.equal(reBatchSrc.includes('p3h-re-split-toggle'), false);
+    assert.ok(reBatchSrc.includes('p3h-re-split-backdrop'));
+    assert.ok(reBatchSrc.includes('p3h-re-split-card'));
+    assert.ok(reBatchSrc.includes('p3h-re-split-save-btn'));
+    assert.ok(reBatchSrc.includes('p3h-re-split-cancel-btn'));
+    assert.ok(reBatchSrc.includes('openSplitCard'));
+    assert.ok(reBatchSrc.includes('closeSplitCard'));
+  }
+
+  // 17.B Demoted Delete Button Contract
+  {
+    const footerMatch = reBatchSrc.match(/<div class="p3h-re-footer-actions">[\s\S]*?<\/div>/);
+    assert.ok(footerMatch, 'Expected .p3h-re-footer-actions markup in re-batch.js');
+    const footerHtml = footerMatch[0];
+    const footerDoc = parseMiniHtml(footerHtml);
+    const delBtn = footerDoc.querySelector('#p3h-re-delete-btn');
+    const cancelBtn = footerDoc.querySelector('#p3h-re-cancel-btn');
+    assert.ok(delBtn, 'Expected #p3h-re-delete-btn in footer');
+    assert.ok(cancelBtn, 'Expected #p3h-re-cancel-btn in footer');
+    const delClasses = delBtn.className.split(/\s+/);
+    assert.ok(delClasses.includes('p3h-btn-muted-danger'));
+    assert.equal(delClasses.includes('p3h-btn-danger-solid'), false);
+    assert.ok(
+      footerHtml.indexOf('p3h-re-delete-btn') < footerHtml.indexOf('p3h-re-cancel-btn'),
+      'Delete button must appear before Close/Cancel button in .p3h-re-footer-actions'
+    );
+    assert.ok(overlayCssSrc.includes('.p3h-btn-muted-danger'));
+  }
+
+  // 17.C In-Modal Heading Switcher & Background Pre-Sync Session Safety
+  {
+    assert.equal(typeof reBatch.extractReHeadingsList, 'function');
+    const headingsDoc = parseMiniHtml(`
+      <div class="pt-left-est">
+        <div class="pt-number-scroll">
+          <a onclick="re_change_heading(101)" class="active"><b class="num">1</b><span class="text">Earthwork</span></a>
+          <a onclick="re_change_heading(102)"><b class="num">2</b><span class="text">Concrete</span></a>
+        </div>
+      </div>
+    `);
+    for (const a of headingsDoc.querySelectorAll('.pt-left-est .pt-number-scroll a')) {
+      a.classList = {
+        contains: (c) => (a.className || '').split(/\s+/).includes(c),
+      };
+    }
+    const headings = reBatch.extractReHeadingsList(headingsDoc);
+    assert.equal(headings.length, 2);
+    assert.equal(headings[0].headId, '101');
+    assert.equal(headings[0].orderNo, '1');
+    assert.equal(headings[0].name, 'Earthwork');
+    assert.equal(headings[0].isActive, true);
+    assert.ok(typeof headings[0].label === 'string' && headings[0].label.includes('Earthwork'));
+    assert.equal(headings[1].headId, '102');
+    assert.equal(headings[1].orderNo, '2');
+    assert.equal(headings[1].name, 'Concrete');
+    assert.equal(headings[1].isActive, false);
+    assert.ok(typeof headings[1].label === 'string' && headings[1].label.includes('Concrete'));
+
+    const bgCalls = [];
+    const bgDoc = parseMiniHtml(`
+      <div>
+        <input type="hidden" id="estEditId" value="23021474307">
+        <div class="pt-left-est">
+          <div class="pt-number-scroll">
+            <a onclick="re_change_heading(101)" class="active"><b class="num">1</b><span class="text">Earthwork</span></a>
+            <a onclick="re_change_heading(102)"><b class="num">2</b><span class="text">Concrete</span></a>
+          </div>
+        </div>
+      </div>
+    `);
+    const activeCtx = {
+      reEstId: '2685432619',
+      headId: '101',
+      headOrderNo: '1',
+      selTab: 'AH',
+      selItem: '',
+      activityId: '234144',
+    };
+    const targetCtx = {
+      reEstId: '2685432619',
+      headId: '102',
+      headOrderNo: '2',
+      selTab: 'AH',
+      selItem: '',
+      activityId: '234144',
+    };
+    const bgRes = await reBatch.fetchReHeadingHelperData({
+      doc: bgDoc,
+      bridgeCtx: { curHeadId: '101', headOrderNo: '1', selTab: 'AH', selItem: '' },
+      contextOverride: targetCtx,
+      forceRefresh: true,
+      restoreCtx: activeCtx,
+      cache: {
+        byHeadingKey: new Map(),
+        pendingAeByActivityId: new Map(),
+        pendingEntriesAeByActivityId: new Map(),
+        dprTotalsByDprEstId: new Map(),
+      },
+      postForm: async (ep, params) => {
+        bgCalls.push({ ep, params });
+        if (ep === 're_deviation_statement.pro') return '<table id="pt-specifications"></table>';
+        if (ep === 'embookAE_pending_head.pro') return '<table id="pt-specifications"></table>';
+        if (ep === 'mbook_pending_ae.pro') return '<table id="pt-specifications"></table>';
+        if (ep === 'revised_estimation.pro') return '<input type="hidden" id="estEditId" value="23021474307">';
+        if (ep === 'change_re_heading.pro') return '<div>ok</div>';
+        throw new Error('Unexpected endpoint: ' + ep);
+      },
+    });
+    assert.equal(bgRes.ok, true);
+    const restoreHeadingCalls = bgCalls.filter((c) => c.ep === 'change_re_heading.pro');
+    assert.ok(restoreHeadingCalls.length >= 1);
+    for (const c of restoreHeadingCalls) {
+      assert.equal(c.params.estHeadid, '101');
+    }
+
+    assert.ok(reBatchSrc.includes('p3h-re-heading-select'));
+    assert.ok(reBatchSrc.includes('p3h-re-head-prev'));
+    assert.ok(reBatchSrc.includes('p3h-re-head-next'));
+    assert.ok(reBatchSrc.includes('p3h-re-bg-sync-pill'));
+  }
+
+  // 17.D Prominent Sync Overlay Contract
+  {
+    assert.ok(reBatchSrc.includes('p3h-re-sync-overlay'));
+    assert.ok(reBatchSrc.includes('p3h-re-sync-card'));
+    assert.ok(reBatchSrc.includes('p3h-re-sync-title'));
+    assert.ok(reBatchSrc.includes('p3h-re-sync-step'));
+    assert.ok(reBatchSrc.includes('p3h-re-sync-bar-fill'));
+    assert.ok(reBatchSrc.includes('p3h-re-pbar-indeterminate'));
+    assert.ok(overlayCssSrc.includes('.p3h-re-sync-overlay'));
+    assert.ok(overlayCssSrc.includes('.p3h-re-sync-spinner'));
+    assert.ok(overlayCssSrc.includes('.p3h-re-pbar-indeterminate'));
+  }
 }
 
 console.log('ALL_P3H_V2_UNIT_TESTS_PASSED');

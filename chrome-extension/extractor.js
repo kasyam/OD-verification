@@ -955,6 +955,19 @@
           const httpErr = new Error('HTTP_' + res.status);
           httpErr.isTransient = isTransientHttpStatus(res.status);
           httpErr.statusCode = res.status;
+          httpErr.endpoint = String(endpoint || '');
+          try {
+            const trimmed = String(text || '').trim();
+            if (trimmed.startsWith('{')) {
+              const errObj = JSON.parse(trimmed);
+              if (errObj && typeof errObj === 'object') {
+                const detail = cleanSingleLine(
+                  errObj.detail || errObj.message || errObj.msg || errObj.title || ''
+                );
+                if (detail) httpErr.detail = detail;
+              }
+            }
+          } catch (_jsonErr) {}
           throw httpErr;
         }
         if (!skipTokenWrite && bestToken) setToken(bestToken);
